@@ -172,6 +172,37 @@ describe("Enforcement Point — request boundary", () => {
     expect(checkpoints.has("request")).toBe(true);
     expect(checkpoints.has("runtime")).toBe(true);
 
+    // grant/revoke are logged exactly once (the handler's rich entry — the
+    // checkpoint defers its allow write), and each carries the grant detail.
+    const grantEntries = trail.filter((e) => e.action === "grant" && e.decision === "allow");
+    expect(grantEntries).toHaveLength(1);
+    expect(grantEntries[0]!.payload).toMatchObject({ grantedTo: "user-bob", scopes: ["invoke"] });
+    expect(trail.filter((e) => e.action === "revoke")).toHaveLength(1);
+
+    await app.close();
+  });
+
+  it("still logs a denied grant attempt from a non-owner", async () => {
+    const { app, auditStore } = await harness();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/agents",
+      headers: as("user-alice"),
+      payload: { name: "Builder" },
+    });
+    const agentId = created.json().agent.id as string;
+
+    const denied = await app.inject({
+      method: "POST",
+      url: "/api/agents/" + agentId + "/grants",
+      headers: as("user-bob"),
+      payload: { grantedTo: "user-carol", scopes: ["invoke"] },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const { entries } = await auditStore.query({ targetId: agentId, action: "grant" });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.decision).toBe("deny");
     await app.close();
   });
 
