@@ -110,13 +110,26 @@ export class PolicyService {
   }
 
   async createGrant(input: CreateGrantInput): Promise<Grant> {
+    const normalizedScopes = [...new Set(input.scopes)] as Scope[];
+    for (const scope of normalizedScopes) {
+      if (!SCOPES.includes(scope)) {
+        throw new HttpError(400, "Invalid scope: " + scope);
+      }
+    }
+    if (input.expiresAt !== undefined && input.expiresAt !== null) {
+      const parsed = Date.parse(input.expiresAt);
+      if (Number.isNaN(parsed)) {
+        throw new HttpError(400, "expiresAt must be a valid ISO timestamp");
+      }
+    }
+
     const timestamp = new Date().toISOString();
     const grant: Grant = {
       id: randomUUID(),
       agentId: input.agentId,
       grantedTo: input.grantedTo,
       grantedBy: input.grantedBy,
-      scopes: input.scopes,
+      scopes: normalizedScopes,
       expiresAt: input.expiresAt ?? null,
       revokedAt: null,
       createdAt: timestamp,
@@ -124,8 +137,14 @@ export class PolicyService {
     await this.store.mutate((database) => {
       const agent = database.agents.find((item) => item.id === input.agentId);
       if (!agent) throw new HttpError(404, "Agent not found");
+      if (!database.users.some((item) => item.id === input.grantedBy)) {
+        throw new HttpError(400, "grantedBy is not a known user");
+      }
       if (!database.users.some((item) => item.id === input.grantedTo)) {
         throw new HttpError(400, "grantedTo is not a known user");
+      }
+      if (input.grantedBy !== agent.ownerId) {
+        throw new HttpError(403, "Only the Agent owner can grant access");
       }
       if (input.grantedTo === agent.ownerId) {
         throw new HttpError(400, "Owner already has full access");

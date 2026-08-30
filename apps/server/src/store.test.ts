@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,7 +23,9 @@ describe("JsonStore", () => {
     await store.initialize();
 
     const mutableStore = store as unknown as { filePath: string };
-    mutableStore.filePath = path.join(root, "missing-directory", "db.json");
+    const failingPath = path.join(root, "db-directory");
+    await mkdir(failingPath, { recursive: true });
+    mutableStore.filePath = failingPath;
     await expect(
       store.mutate((database) => {
         database.messages.push({
