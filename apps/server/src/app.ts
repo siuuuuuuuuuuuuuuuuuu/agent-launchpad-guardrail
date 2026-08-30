@@ -7,6 +7,17 @@ import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import { HttpError } from "./errors.js";
 import type { AgentService } from "./agent-service.js";
+import { AuditLogger } from "./audit-log/logger.js";
+import { createAuditRoutes } from "./audit-log/routes.js";
+import type { AuditStore } from "./audit-log/types.js";
+
+// lets any route handler reach `request.server.auditLogger.record(...)`
+// without having to thread it through every function signature
+declare module "fastify" {
+  interface FastifyInstance {
+    auditLogger: AuditLogger;
+  }
+}
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
@@ -26,6 +37,7 @@ const messageBody = z.object({
 export async function createApp(
   config: AppConfig,
   service: AgentService,
+  auditStore: AuditStore,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
@@ -41,6 +53,17 @@ export async function createApp(
         ? ["http://localhost:5173", "http://127.0.0.1:5173"]
         : false,
   });
+
+  const auditLogger = new AuditLogger(auditStore);
+  app.decorate("auditLogger", auditLogger);
+
+  // GET /api/audit — inherits the same bearer-token gate as every other
+  // /api/* route below via the onRequest hook, even though it's registered
+  // above it. app.test.ts locks that in; don't reorder these without
+  // checking it still passes, or the audit log becomes world-readable.
+  // Tighten further with createAuditRoutes(store, { authorize }) once
+  // there's a real per-user model to check against.
+  await app.register(createAuditRoutes(auditStore));
 
   app.addHook("onRequest", async (request, reply) => {
     if (

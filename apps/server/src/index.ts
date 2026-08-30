@@ -1,6 +1,7 @@
 import path from "node:path";
 import { AgentService } from "./agent-service.js";
 import { createApp } from "./app.js";
+import { JsonlAuditStore } from "./audit-log/store/JsonlAuditStore.js";
 import { loadConfig, writeCodexConfig } from "./config.js";
 import { createRunner } from "./runner-factory.js";
 import { JsonStore } from "./store.js";
@@ -15,7 +16,9 @@ const runner = createRunner(config);
 const service = new AgentService(config, store, workspaces, runner);
 await service.initialize();
 
-const app = await createApp(config, service);
+const auditStore = new JsonlAuditStore(path.join(config.dataDirectory, "audit.jsonl"));
+
+const app = await createApp(config, service, auditStore);
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "Shutting down");
