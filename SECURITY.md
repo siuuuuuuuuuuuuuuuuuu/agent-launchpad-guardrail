@@ -11,7 +11,17 @@ credentials, personal data, or exploit details in an issue.
 
 ## Known limitations
 
-- Shared demo token; no user identity, authorization, RBAC, or tenant isolation
+- Identity is a **mock**: a trusted `X-User-Id` header resolved against a seeded
+  user table (`apps/server/src/seed.ts`). No OAuth/SSO, no passwords, no session
+  management. Anything that can set request headers can assume any principal —
+  the shared `APP_AUTH_TOKEN` is the only barrier to that.
+- Authorization **is** enforced server-side (per-Agent delegated, scoped,
+  revocable grants; checked at the Fastify and `AgentRunner` boundaries; every
+  decision audited). See [docs/POLICY_ENFORCEMENT.md](docs/POLICY_ENFORCEMENT.md).
+  It is not a general policy engine and covers one resource type (Agents).
+- Audit log has no access control of its own beyond the shared token + a valid
+  principal; any seeded user can read the whole log.
+- No tenant isolation at the Runtime/container layer.
 - No CSRF protection
 - No per-Agent container boundary in ECS mode
 - Ordinary local containers, not hardened multi-tenant sandboxes
