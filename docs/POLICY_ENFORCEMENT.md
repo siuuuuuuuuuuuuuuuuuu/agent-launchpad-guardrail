@@ -71,6 +71,10 @@ policy.hasScope(actorUserId, agentId, action) -> { allow: boolean, reason: strin
 | `GET`·`POST /api/agents/:id/grants` | `grant` | owner only |
 | `DELETE /api/agents/:id/grants/:grantId` | `revoke` | owner only |
 
+`grant`/`revoke` routes carry `handlerAudits` — the handler writes the one
+authoritative entry (with `grantId`, `grantedTo`, `scopes`); the checkpoint only
+logs the deny path. Listing grants (`GET`) is a read and is not logged on allow.
+
 ## New endpoints
 
 | Endpoint | Purpose |

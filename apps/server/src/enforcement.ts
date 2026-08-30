@@ -39,7 +39,16 @@ export const RULES: readonly EnforcementRule[] = [
   { method: "GET", url: "/api/agents/:id/messages", action: "view_runs", agentIdFrom: "params.id" },
   { method: "GET", url: "/api/agents/:id/runs", action: "view_runs", agentIdFrom: "params.id" },
   { method: "GET", url: "/api/runs/:id", action: "view_runs", agentIdFrom: "run.id" },
-  { method: "GET", url: "/api/agents/:id/grants", action: "grant", agentIdFrom: "params.id" },
+  // Listing grants is a read; handlerAudits keeps a successful list out of the
+  // log (a denied attempt to list still records) so it can't be mistaken for
+  // an actual grant being issued.
+  {
+    method: "GET",
+    url: "/api/agents/:id/grants",
+    action: "grant",
+    agentIdFrom: "params.id",
+    handlerAudits: true,
+  },
   {
     method: "POST",
     url: "/api/agents/:id/grants",
