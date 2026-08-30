@@ -99,11 +99,142 @@ describe("PolicyService.hasScope", () => {
     expect(policy.hasScope("user-bob", agentId, "invoke").allow).toBe(false);
   });
 
+  it("allows a future expiry and rejects a past expiry", async () => {
+    const { policy, agentId } = await fixture();
+    await policy.createGrant({
+      agentId,
+      grantedTo: "user-bob",
+      grantedBy: "user-alice",
+      scopes: ["invoke"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(policy.hasScope("user-bob", agentId, "invoke").allow).toBe(true);
+
+    await policy.createGrant({
+      agentId,
+      grantedTo: "user-carol",
+      grantedBy: "user-alice",
+      scopes: ["invoke"],
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    expect(policy.hasScope("user-carol", agentId, "invoke").allow).toBe(false);
+  });
+
+  it("revocation is effective immediately", async () => {
+    const { policy, agentId } = await fixture();
+    const grant = await policy.createGrant({
+      agentId,
+      grantedTo: "user-bob",
+      grantedBy: "user-alice",
+      scopes: ["invoke"],
+    });
+    expect(policy.hasScope("user-bob", agentId, "invoke").allow).toBe(true);
+    await policy.revokeGrant(agentId, grant.id);
+    expect(policy.hasScope("user-bob", agentId, "invoke").allow).toBe(false);
+  });
+
+  it("owner access works without a grant", async () => {
+    const { policy, agentId } = await fixture();
+    expect(policy.hasScope("user-alice", agentId, "invoke").allow).toBe(true);
+    expect(policy.hasScope("user-alice", agentId, "delete").allow).toBe(true);
+  });
+
   it("rejects an unknown principal and an unknown agent", async () => {
     const { policy, agentId } = await fixture();
     expect(policy.hasScope("user-ghost", agentId, "invoke").reason).toBe("unknown principal");
     expect(policy.hasScope("user-alice", "agent-missing", "invoke").reason).toBe(
       "agent not found",
     );
+  });
+
+  it("isolates grants to the correct Agent", async () => {
+    const { store, policy } = await fixture();
+    const agentA = {
+      id: "agent-a",
+      name: "A",
+      description: "",
+      instructions: "",
+      ownerId: "user-alice",
+      status: "ready",
+      workspacePath: "/tmp/a",
+      codexThreadId: null,
+      lastError: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } satisfies Agent;
+    const agentB = {
+      id: "agent-b",
+      name: "B",
+      description: "",
+      instructions: "",
+      ownerId: "user-alice",
+      status: "ready",
+      workspacePath: "/tmp/b",
+      codexThreadId: null,
+      lastError: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } satisfies Agent;
+    await store.mutate((db) => {
+      db.agents.push(agentA, agentB);
+    });
+    await policy.createGrant({
+      agentId: agentA.id,
+      grantedTo: "user-bob",
+      grantedBy: "user-alice",
+      scopes: ["invoke"],
+    });
+    expect(policy.hasScope("user-bob", agentA.id, "invoke").allow).toBe(true);
+    expect(policy.hasScope("user-bob", agentB.id, "invoke").allow).toBe(false);
+  });
+
+  it("isolates grants to the correct user", async () => {
+    const { policy, agentId } = await fixture();
+    await policy.createGrant({
+      agentId,
+      grantedTo: "user-bob",
+      grantedBy: "user-alice",
+      scopes: ["invoke"],
+    });
+    expect(policy.hasScope("user-bob", agentId, "invoke").allow).toBe(true);
+    expect(policy.hasScope("user-carol", agentId, "invoke").allow).toBe(false);
+  });
+
+  it("accepts multiple granted scopes while denying ungranted ones", async () => {
+    const { policy, agentId } = await fixture();
+    await policy.createGrant({
+      agentId,
+      grantedTo: "user-bob",
+      grantedBy: "user-alice",
+      scopes: ["invoke", "view_config"],
+    });
+    expect(policy.hasScope("user-bob", agentId, "invoke").allow).toBe(true);
+    expect(policy.hasScope("user-bob", agentId, "view_config").allow).toBe(true);
+    expect(policy.hasScope("user-bob", agentId, "view_runs").allow).toBe(false);
+  });
+
+  it("denies owner-only actions even to a delegated user", async () => {
+    const { policy, agentId } = await fixture();
+    await policy.createGrant({
+      agentId,
+      grantedTo: "user-bob",
+      grantedBy: "user-alice",
+      scopes: ["invoke", "view_config", "edit_config", "view_runs"],
+    });
+    expect(policy.hasScope("user-bob", agentId, "delete").allow).toBe(false);
+    expect(policy.hasScope("user-bob", agentId, "grant").allow).toBe(false);
+    expect(policy.hasScope("user-bob", agentId, "revoke").allow).toBe(false);
+  });
+
+  it("rejects invalid grant scopes before they are persisted", async () => {
+    const { policy, agentId } = await fixture();
+    await expect(
+      policy.createGrant({
+        agentId,
+        grantedTo: "user-bob",
+        grantedBy: "user-alice",
+        scopes: ["invoke", "not-a-real-scope" as never],
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 });

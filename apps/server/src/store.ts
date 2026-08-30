@@ -86,6 +86,7 @@ export class JsonStore {
   }
 
   private async persist(data: Database = this.data): Promise<void> {
+    await mkdir(path.dirname(this.filePath), { recursive: true });
     const temporaryPath = this.filePath + ".tmp";
     await writeFile(temporaryPath, JSON.stringify(data, null, 2) + "\n", {
       encoding: "utf8",
