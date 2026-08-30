@@ -9,9 +9,15 @@ Volcengine ECS.
 
 ## Selected track: Bouncer — identity & authorization
 
-This fork adds **per-Agent delegated, revocable, scoped access control**,
-enforced at the backend and Runtime boundary (not the UI), with a full audit
-trail of every decision.
+**The problem.** The Starter Kit is single-user: any request to the API can act
+on any Agent. There is no owner, no way to give someone limited access, and no
+record of who did what. Agents read and write files, run commands, and take
+real actions — so a multi-user platform needs to know who may do what to which
+Agent, who actually did it, and how to cut access off.
+
+**What this fork adds:** **per-Agent delegated, revocable, scoped access
+control**, enforced at the backend and Runtime boundary (not the UI), with a
+full audit trail of every decision.
 
 - Every Agent has an owner. Owners issue **scoped, time-bound, revocable**
   grants (`invoke`, `view_config`, `edit_config`, `view_runs`).
@@ -31,9 +37,11 @@ Enforcement: `apps/server/src/enforcement.ts` · Policy: `apps/server/src/policy
 Audit: `apps/server/src/audit-log/` · UI: `apps/web/src/App.tsx`
 
 > [!WARNING]
-> This is a single-user proof of concept. It intentionally has no identity,
-> tracing, audit, or hardened sandbox middleware. Do not use production data or
-> credentials. See [SECURITY.md](SECURITY.md).
+> Hackathon proof of concept. Identity is a **mock** (`X-User-Id` header +
+> seeded users) — authorization and audit are real and enforced server-side,
+> but there is no production auth, no tenant isolation, and no hardened
+> sandbox. Do not use production data or credentials. See
+> [SECURITY.md](SECURITY.md).
 
 ## Screenshots
 
@@ -110,10 +118,11 @@ xdg-open http://localhost:3000   # Linux desktop
 
 In the Web UI:
 
-1. Select **Create Agent**.
-2. Enter a name, description, and workspace instructions.
-3. Select **Create Agent** again.
-4. Enter a task in the Playground, for example:
+1. Pick a principal (mock login) — start as **Alice**.
+2. Select **Create Agent**.
+3. Enter a name, description, and workspace instructions.
+4. Select **Create Agent** again.
+5. Enter a task in the Playground, for example:
 
    ```text
    Create a TypeScript hello-world CLI, add a test, and run it.

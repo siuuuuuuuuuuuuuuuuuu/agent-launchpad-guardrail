@@ -88,9 +88,11 @@ logs the deny path. Listing grants (`GET`) is a read and is not logged on allow.
 
 ## Handoff notes
 
-- **Identity/Policy owner:** `apps/server/src/policy.ts` internals + `seed.ts`
-  are yours. Keep `hasScope` / `getUser` / `canSee` signatures; the grant CRUD
-  here is a minimal placeholder.
+- **Identity/Policy owner:** `apps/server/src/policy.ts` internals + `seed.ts`.
+  Keep `hasScope` / `getUser` / `canSee` signatures stable — the enforcement
+  layer depends only on those. `createGrant` validates scopes, `expiresAt`, and
+  that `grantedBy` is the Agent owner; swapping the seeded user table for a real
+  identity provider is the intended next step and touches nothing else.
 - **Audit** (merged from `main`, owned by `apps/server/src/audit-log/`):
   enforcement calls `AuditLogger.record({ actor, action, target, decision,
   payload })`. `createApp(config, service, auditStore, policy)` builds the
@@ -114,5 +116,7 @@ curl -sX POST localhost:3000/api/agents/$ID/messages $B -d '{"content":"hi"}'   
 curl -s "localhost:3000/api/audit?target=$ID" $A
 ```
 
-Tests: `apps/server/src/policy.test.ts`, `apps/server/src/enforcement.test.ts`
-(full scenario + runtime-boundary bypass).
+Tests: `policy.test.ts` (hasScope + grant validation), `enforcement.test.ts`
+(full HTTP scenario + runtime-boundary bypass), `guardrail-integration.test.ts`
+(identity → enforcement → audit through the real `GET /api/audit` route).
+`./scripts/guardrail-demo.sh` runs the scenario above against a live server.
