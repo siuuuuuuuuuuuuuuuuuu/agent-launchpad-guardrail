@@ -22,16 +22,7 @@ export interface Grant {
   createdAt: string;
 }
 
-export interface AuditEntry {
-  id: string;
-  timestamp: string;
-  actorUserId: string;
-  agentId: string | null;
-  action: string;
-  requestedScope: string | null;
-  decision: "allow" | "deny";
-  result: string;
-}
+// Audit entry shape lives in ./audit-log/types.ts (owned by the Audit subsystem).
 
 export interface Agent {
   id: string;
@@ -83,7 +74,6 @@ export interface Database {
   messages: Message[];
   runs: AgentRun[];
   grants: Grant[];
-  auditEntries: AuditEntry[];
 }
 
 export interface CreateAgentInput {

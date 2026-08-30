@@ -3,7 +3,8 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentService } from "./agent-service.js";
-import { JsonAuditLog } from "./audit.js";
+import { AuditLogger } from "./audit-log/logger.js";
+import { MemoryAuditStore } from "./audit-log/store/MemoryAuditStore.js";
 import { loadConfig } from "./config.js";
 import { PolicyService } from "./policy.js";
 import { JsonStore } from "./store.js";
@@ -57,7 +58,7 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
     new WorkspaceManager(path.join(root, "workspaces")),
     runner,
     new PolicyService(store),
-    new JsonAuditLog(store),
+    new AuditLogger(new MemoryAuditStore()),
   );
   await service.initialize();
   return service;

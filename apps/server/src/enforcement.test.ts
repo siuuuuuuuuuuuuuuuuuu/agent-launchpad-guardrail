@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentService } from "./agent-service.js";
-import { JsonAuditLog } from "./audit.js";
+import { AuditLogger } from "./audit-log/logger.js";
+import { MemoryAuditStore } from "./audit-log/store/MemoryAuditStore.js";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { PolicyService } from "./policy.js";
@@ -13,7 +14,18 @@ import { WorkspaceManager } from "./workspace.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  // A FakeRunner run settles a tick after the test returns; on Windows its
+  // trailing store write can race the cleanup (ENOTEMPTY). Retry briefly.
+  for (const d of dirs.splice(0)) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await rm(d, { recursive: true, force: true });
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+  }
 });
 
 class FakeRunner implements AgentRunner {
@@ -41,25 +53,31 @@ async function harness(runner: AgentRunner = new FakeRunner()) {
   });
   const store = new JsonStore(path.join(root, "data", "db.json"));
   const policy = new PolicyService(store);
-  const audit = new JsonAuditLog(store);
+  const auditStore = new MemoryAuditStore();
   const service = new AgentService(
     config,
     store,
     new WorkspaceManager(path.join(root, "workspaces")),
     runner,
     policy,
-    audit,
+    new AuditLogger(auditStore),
   );
   await service.initialize();
-  const app = await createApp(config, service, policy, audit);
-  return { app, service, policy, audit };
+  const app = await createApp(config, service, auditStore, policy);
+  return { app, service, policy, auditStore };
 }
 
 const as = (userId: string) => ({ "x-user-id": userId });
 
+// Flatten jone's audit entries to "actor:action:decision" for terse assertions.
+async function decisions(store: MemoryAuditStore, targetId: string) {
+  const { entries } = await store.query({ targetId });
+  return entries;
+}
+
 describe("Enforcement Point — request boundary", () => {
   it("runs the delegated-access demo scenario end to end", async () => {
-    const { app, audit } = await harness();
+    const { app, auditStore } = await harness();
 
     // 1. Alice creates an Agent — she becomes the owner.
     const created = await app.inject({
@@ -136,19 +154,23 @@ describe("Enforcement Point — request boundary", () => {
     expect(aliceInvoke.statusCode).toBe(202);
 
     // Audit trail carries every decision.
-    const trail = audit.query({ agentId });
-    const summary = trail.map((e) => e.actorUserId + ":" + e.action + ":" + e.decision);
+    const trail = await decisions(auditStore, agentId);
+    const summary = trail.map((e) => e.actor.id + ":" + e.action + ":" + e.decision);
     expect(summary).toContain("user-bob:invoke:deny");
     expect(summary).toContain("user-bob:invoke:allow");
     expect(summary).toContain("user-bob:delete:deny");
     expect(summary).toContain("user-alice:grant:allow");
     expect(summary).toContain("user-alice:revoke:allow");
-    // Dual checkpoint: the invoke that Bob was allowed is logged twice.
+
+    // Dual checkpoint: the invoke Bob was allowed is logged at both boundaries.
     const bobInvokeAllows = trail.filter(
-      (e) => e.actorUserId === "user-bob" && e.action === "invoke" && e.decision === "allow",
+      (e) => e.actor.id === "user-bob" && e.action === "invoke" && e.decision === "allow",
     );
-    expect(bobInvokeAllows.some((e) => e.result.startsWith("request"))).toBe(true);
-    expect(bobInvokeAllows.some((e) => e.result.startsWith("runtime"))).toBe(true);
+    const checkpoints = new Set(
+      bobInvokeAllows.map((e) => (e.payload as { checkpoint?: string })?.checkpoint),
+    );
+    expect(checkpoints.has("request")).toBe(true);
+    expect(checkpoints.has("runtime")).toBe(true);
 
     await app.close();
   });
@@ -163,7 +185,10 @@ describe("Enforcement Point — request boundary", () => {
     });
     const agentId = created.json().agent.id as string;
 
-    expect((await app.inject({ method: "GET", url: "/api/agents", headers: as("user-bob") })).json().agents).toHaveLength(0);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/agents", headers: as("user-bob") })).json()
+        .agents,
+    ).toHaveLength(0);
 
     await app.inject({
       method: "POST",
@@ -171,7 +196,10 @@ describe("Enforcement Point — request boundary", () => {
       headers: as("user-alice"),
       payload: { grantedTo: "user-bob", scopes: ["view_config"] },
     });
-    expect((await app.inject({ method: "GET", url: "/api/agents", headers: as("user-bob") })).json().agents).toHaveLength(1);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/agents", headers: as("user-bob") })).json()
+        .agents,
+    ).toHaveLength(1);
     await app.close();
   });
 
@@ -185,22 +213,24 @@ describe("Enforcement Point — request boundary", () => {
 
 describe("Enforcement Point — runtime boundary", () => {
   it("blocks a run that bypassed the request boundary", async () => {
-    const { service, audit } = await harness();
+    const { service, auditStore } = await harness();
     const agent = await service.createAgent({ name: "Builder" }, "user-alice");
 
     // Call the service directly as Bob — no HTTP, no grant. The request-boundary
     // check never ran, but the runtime checkpoint fails the run closed.
     await service.sendMessage(agent.id, "do work", "user-bob");
     await expect
-      .poll(async () => {
-        const runs = service.getRuns(agent.id);
-        return runs[0]?.status;
-      })
+      .poll(async () => service.getRuns(agent.id)[0]?.status)
       .toBe("failed");
 
-    const runtimeDeny = audit
-      .query({ agentId: agent.id, action: "invoke", decision: "deny" })
-      .find((e) => e.result.startsWith("runtime"));
+    const { entries } = await auditStore.query({
+      targetId: agent.id,
+      action: "invoke",
+      decision: "deny",
+    });
+    const runtimeDeny = entries.find(
+      (e) => (e.payload as { checkpoint?: string })?.checkpoint === "runtime",
+    );
     expect(runtimeDeny).toBeDefined();
   });
 });

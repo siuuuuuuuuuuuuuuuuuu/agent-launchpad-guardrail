@@ -17,9 +17,10 @@ Browser ──X-User-Id + Bearer──▶ Fastify
                               AgentRunner ─▶ Codex   (only reached if both checkpoints allow)
 ```
 
-Every call to `enforce()` writes one `AuditEntry` (allow **and** deny) before it
-returns or throws. A request that skips checkpoint 1 (direct `AgentService`
-call, future internal route) is still stopped at checkpoint 2.
+Every call to `enforce()` writes one audit entry via the audit subsystem's
+`AuditLogger.record()` (allow **and** deny), tagged `payload.checkpoint` =
+`"request"` | `"runtime"`. A request that skips checkpoint 1 (direct
+`AgentService` call, future internal route) is still stopped at checkpoint 2.
 
 ## Identity (mock)
 
@@ -37,7 +38,7 @@ call, future internal route) is still stopped at checkpoint 2.
 | `User` | `id`, `name`, `role: "owner-capable" \| "standard"` |
 | `Agent` (extended) | `+ ownerId` — set to the creator, backfilled by store migration |
 | `Grant` | `agentId`, `grantedTo`, `grantedBy`, `scopes: Scope[]`, `expiresAt`, `revokedAt` |
-| `AuditEntry` | `timestamp`, `actorUserId`, `agentId`, `action`, `requestedScope`, `decision`, `result` |
+| `AuditEntry` | owned by `apps/server/src/audit-log/types.ts`: `actor{id,type}`, `action`, `target{type,id}`, `decision`, `payload`, `timestamp` |
 
 `Scope = "invoke" | "view_config" | "edit_config" | "view_runs"`. Store bumped
 to `version: 2`; v1 files migrate on load (agents/runs get a fallback owner).
@@ -79,16 +80,19 @@ policy.hasScope(actorUserId, agentId, action) -> { allow: boolean, reason: strin
 | `GET /api/agents/:id/grants` | list grants (owner) |
 | `POST /api/agents/:id/grants` | `{ grantedTo, scopes[], expiresAt? }` → create grant (owner) |
 | `DELETE /api/agents/:id/grants/:grantId` | revoke (owner) |
-| `GET /api/audit?actorUserId=&agentId=&action=&decision=&limit=` | filtered audit log |
+| `GET /api/audit` (from `audit-log/routes.ts`) | filtered audit log — `?actor=&action=&target=&decision=&from=&to=&limit=&cursor=` → `{ entries, nextCursor }` |
 
 ## Handoff notes
 
 - **Identity/Policy owner:** `apps/server/src/policy.ts` internals + `seed.ts`
   are yours. Keep `hasScope` / `getUser` / `canSee` signatures; the grant CRUD
   here is a minimal placeholder.
-- **Audit owner:** `apps/server/src/audit.ts` — keep the `AuditLog` interface;
-  `JsonAuditLog` is a stub over the same JSON store. `redact()` strips
-  key/token/password-shaped strings before write.
+- **Audit** (merged from `main`, owned by `apps/server/src/audit-log/`):
+  enforcement calls `AuditLogger.record({ actor, action, target, decision,
+  payload })`. `createApp(config, service, auditStore, policy)` builds the
+  Fastify-boundary logger and decorates `app.auditLogger`; `index.ts` builds a
+  second logger over the same `JsonlAuditStore` for the runtime checkpoint in
+  `AgentService`.
 
 ## Demo (curl — checkpoint is real, not a hidden button)
 
@@ -103,7 +107,7 @@ curl -sX POST localhost:3000/api/agents/$ID/messages $B -d '{"content":"hi"}'   
 curl -sX DELETE localhost:3000/api/agents/$ID        $B                          # 403 owner-only
 curl -sX DELETE localhost:3000/api/agents/$ID/grants/$GRANT $A                    # 200
 curl -sX POST localhost:3000/api/agents/$ID/messages $B -d '{"content":"hi"}'   # 403
-curl -s "localhost:3000/api/audit?agentId=$ID" $A
+curl -s "localhost:3000/api/audit?target=$ID" $A
 ```
 
 Tests: `apps/server/src/policy.test.ts`, `apps/server/src/enforcement.test.ts`

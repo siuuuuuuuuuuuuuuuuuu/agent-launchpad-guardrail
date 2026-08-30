@@ -12,7 +12,6 @@ const emptyDatabase = (): Database => ({
   messages: [],
   runs: [],
   grants: [],
-  auditEntries: [],
 });
 
 // Forward-migrate any earlier on-disk shape (v1 had no identity/policy tables).
@@ -40,7 +39,6 @@ function migrate(raw: Record<string, unknown>): Database {
     messages: (raw.messages as Database["messages"]) ?? [],
     runs,
     grants: (raw.grants as Database["grants"]) ?? [],
-    auditEntries: (raw.auditEntries as Database["auditEntries"]) ?? [],
   };
 }
 

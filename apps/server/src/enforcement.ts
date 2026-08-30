@@ -1,4 +1,4 @@
-import type { AuditLog } from "./audit.js";
+import type { AuditLogger } from "./audit-log/logger.js";
 import { HttpError } from "./errors.js";
 import type { Action, PolicyService } from "./policy.js";
 
@@ -57,39 +57,29 @@ export interface EnforceArgs {
   agentId: string | null;
   action: Action;
   policy: PolicyService;
-  audit: AuditLog;
-  /** Which checkpoint is speaking — recorded in the audit result. */
+  audit: AuditLogger;
+  /** Which checkpoint is speaking — recorded on the audit entry payload. */
   checkpoint: "request" | "runtime";
 }
 
 /**
  * Run one authorization decision: consult the Policy Plane, write the outcome
- * to the audit log, and throw `HttpError(403)` on deny. Returns nothing on
- * allow.
+ * to the audit log (both allow and deny — the enforcement seam the audit
+ * subsystem expects), and throw `HttpError` on deny. Returns nothing on allow.
  */
 export async function enforce(args: EnforceArgs): Promise<void> {
   const { actorUserId, agentId, action, policy, audit, checkpoint } = args;
 
-  if (!agentId) {
-    await audit.record({
-      actorUserId,
-      agentId: null,
-      action,
-      requestedScope: action,
-      decision: "deny",
-      result: checkpoint + " checkpoint: target Agent not found",
-    });
-    throw new HttpError(404, "Agent not found");
-  }
+  const decision = agentId
+    ? policy.hasScope(actorUserId, agentId, action)
+    : { allow: false, reason: "agent not found" };
 
-  const decision = policy.hasScope(actorUserId, agentId, action);
   await audit.record({
-    actorUserId,
-    agentId,
+    actor: { id: actorUserId, type: "human" },
     action,
-    requestedScope: action,
+    target: { type: "agent", id: agentId ?? "unknown" },
     decision: decision.allow ? "allow" : "deny",
-    result: checkpoint + " checkpoint: " + decision.reason,
+    payload: { checkpoint, reason: decision.reason, requestedScope: action },
   });
 
   if (!decision.allow) {

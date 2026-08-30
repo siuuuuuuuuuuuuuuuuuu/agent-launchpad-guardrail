@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AuditLog } from "./audit.js";
+import type { AuditLogger } from "./audit-log/logger.js";
 import type { AppConfig } from "./config.js";
 import { isArkConfigured } from "./config.js";
 import { enforce } from "./enforcement.js";
@@ -28,7 +28,7 @@ export class AgentService {
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
     private readonly policy: PolicyService,
-    private readonly audit: AuditLog,
+    private readonly audit: AuditLogger,
   ) {}
 
   async initialize(): Promise<void> {

@@ -21,15 +21,20 @@ export interface Grant {
   createdAt: string;
 }
 
+// Mirrors apps/server/src/audit-log/types.ts (owned by the Audit subsystem).
 export interface AuditEntry {
   id: string;
   timestamp: string;
-  actorUserId: string;
-  agentId: string | null;
+  actor: { id: string; type?: "human" | "agent" };
   action: string;
-  requestedScope: string | null;
+  target: { type: string; id: string };
   decision: "allow" | "deny";
-  result: string;
+  payload: Record<string, unknown> | null;
+}
+
+export interface AuditPage {
+  entries: AuditEntry[];
+  nextCursor: string | null;
 }
 
 export interface Agent {

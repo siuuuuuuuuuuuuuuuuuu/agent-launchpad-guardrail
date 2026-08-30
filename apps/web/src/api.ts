@@ -1,7 +1,7 @@
 import type {
   Agent,
   AgentRun,
-  AuditEntry,
+  AuditPage,
   Grant,
   Message,
   Scope,
@@ -113,8 +113,9 @@ export const api = {
       "/api/agents/" + agentId + "/grants/" + grantId,
       { method: "DELETE" },
     ),
+  // GET /api/audit — filters: actor, action, target, decision, from, to, limit, cursor
   audit: (params: Record<string, string> = {}) =>
-    request<{ entries: AuditEntry[] }>(
+    request<AuditPage>(
       "/api/audit" +
         (Object.keys(params).length
           ? "?" + new URLSearchParams(params).toString()
