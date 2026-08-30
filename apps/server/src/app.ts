@@ -147,6 +147,7 @@ export async function createApp(
       policy,
       audit: auditLogger,
       checkpoint: "request",
+      handlerAudits: rule.handlerAudits ?? false,
     });
   });
 
