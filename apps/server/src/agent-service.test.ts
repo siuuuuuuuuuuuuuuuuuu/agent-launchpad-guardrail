@@ -3,10 +3,14 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentService } from "./agent-service.js";
+import { JsonAuditLog } from "./audit.js";
 import { loadConfig } from "./config.js";
+import { PolicyService } from "./policy.js";
 import { JsonStore } from "./store.js";
 import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
+
+const OWNER = "user-alice";
 
 class FakeRunner implements AgentRunner {
   async run(request: RunnerRequest): Promise<RunnerResult> {
@@ -46,11 +50,14 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
     ARK_API_KEY: "test-key",
     ARK_MODEL: "ep-test",
   });
+  const store = new JsonStore(path.join(root, "data", "db.json"));
   const service = new AgentService(
     config,
-    new JsonStore(path.join(root, "data", "db.json")),
+    store,
     new WorkspaceManager(path.join(root, "workspaces")),
     runner,
+    new PolicyService(store),
+    new JsonAuditLog(store),
   );
   await service.initialize();
   return service;
@@ -59,7 +66,7 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
 describe("Agent lifecycle", () => {
   it("creates, updates, stops, starts and deletes an Agent", async () => {
     const service = await makeService();
-    const agent = await service.createAgent({ name: "Builder" });
+    const agent = await service.createAgent({ name: "Builder" }, OWNER);
     expect(service.listAgents()).toHaveLength(1);
     expect((await service.updateAgent(agent.id, { description: "Builds apps" })).description)
       .toBe("Builds apps");
@@ -71,8 +78,8 @@ describe("Agent lifecycle", () => {
 
   it("persists a playground conversation", async () => {
     const service = await makeService();
-    const agent = await service.createAgent({ name: "Coder" });
-    const { run } = await service.sendMessage(agent.id, "write hello world");
+    const agent = await service.createAgent({ name: "Coder" }, OWNER);
+    const { run } = await service.sendMessage(agent.id, "write hello world", OWNER);
     await expect.poll(() => service.getRun(run.id).status).toBe("completed");
     const messages = service.getMessages(agent.id);
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
@@ -91,10 +98,10 @@ describe("Agent lifecycle", () => {
       isAvailable: async () => true,
     };
     const service = await makeService(runner);
-    const agent = await service.createAgent({ name: "Concurrent" });
+    const agent = await service.createAgent({ name: "Concurrent" }, OWNER);
     const attempts = await Promise.allSettled([
-      service.sendMessage(agent.id, "first"),
-      service.sendMessage(agent.id, "second"),
+      service.sendMessage(agent.id, "first", OWNER),
+      service.sendMessage(agent.id, "second", OWNER),
     ]);
 
     expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
@@ -119,11 +126,11 @@ describe("Agent lifecycle", () => {
       cancel: async () => false,
       isAvailable: async () => true,
     });
-    const agent = await service.createAgent({ name: "Busy" });
-    const { run } = await service.sendMessage(agent.id, "first");
+    const agent = await service.createAgent({ name: "Busy" }, OWNER);
+    const { run } = await service.sendMessage(agent.id, "first", OWNER);
 
     await expect(service.startAgent(agent.id)).rejects.toMatchObject({ statusCode: 409 });
-    await expect(service.sendMessage(agent.id, "second")).rejects.toMatchObject({
+    await expect(service.sendMessage(agent.id, "second", OWNER)).rejects.toMatchObject({
       statusCode: 409,
     });
 

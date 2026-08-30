@@ -20,7 +20,7 @@ export interface ParsedEvents {
 }
 
 export function buildCodexArgs(
-  request: RunnerRequest,
+  request: Pick<RunnerRequest, "workspacePath" | "prompt" | "threadId">,
   sandboxMode: AppConfig["codexSandboxMode"],
   workspacePath = request.workspacePath,
 ): string[] {

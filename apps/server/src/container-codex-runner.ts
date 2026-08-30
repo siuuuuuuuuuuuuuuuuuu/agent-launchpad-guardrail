@@ -36,7 +36,7 @@ export function containerName(agentId: string, instanceId = "default"): string {
 }
 
 export function buildContainerRunArgs(
-  request: RunnerRequest,
+  request: Pick<RunnerRequest, "agentId" | "workspacePath" | "prompt" | "threadId">,
   config: AppConfig,
 ): string[] {
   const name = containerName(request.agentId, config.runtimeInstanceId);

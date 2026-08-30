@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import type { AuditLog } from "./audit.js";
 import type { AppConfig } from "./config.js";
 import { isArkConfigured } from "./config.js";
+import { enforce } from "./enforcement.js";
 import { HttpError, RunCancelledError } from "./errors.js";
+import type { PolicyService } from "./policy.js";
 import { JsonStore } from "./store.js";
 import type {
   Agent,
@@ -24,6 +27,8 @@ export class AgentService {
     private readonly store: JsonStore,
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
+    private readonly policy: PolicyService,
+    private readonly audit: AuditLog,
   ) {}
 
   async initialize(): Promise<void> {
@@ -60,7 +65,14 @@ export class AgentService {
     return agent;
   }
 
-  async createAgent(input: CreateAgentInput): Promise<Agent> {
+  /** Non-throwing agent lookup for a run id, used by the enforcement layer. */
+  findRunAgentId(runId: string): string | null {
+    return (
+      this.store.snapshot().runs.find((item) => item.id === runId)?.agentId ?? null
+    );
+  }
+
+  async createAgent(input: CreateAgentInput, actorUserId: string): Promise<Agent> {
     const timestamp = now();
     const id = randomUUID();
     const agent: Agent = {
@@ -68,6 +80,7 @@ export class AgentService {
       name: input.name.trim(),
       description: input.description?.trim() ?? "",
       instructions: input.instructions?.trim() ?? "",
+      ownerId: actorUserId,
       status: "ready",
       workspacePath: this.workspaces.workspacePath(id),
       codexThreadId: null,
@@ -153,6 +166,7 @@ export class AgentService {
   async sendMessage(
     agentId: string,
     prompt: string,
+    actorUserId: string,
   ): Promise<{ run: AgentRun; message: Message }> {
     if (!isArkConfigured(this.config)) {
       throw new HttpError(
@@ -165,6 +179,7 @@ export class AgentService {
     const run: AgentRun = {
       id: runId,
       agentId,
+      actorUserId,
       status: "queued",
       prompt,
       output: null,
@@ -244,8 +259,20 @@ export class AgentService {
       if (this.cancellationRequests.has(agentAtStart.id)) {
         throw new RunCancelledError();
       }
+      // Second checkpoint: re-verify at the Runtime boundary. A grant revoked
+      // between request admission and Codex invocation is refused here, and a
+      // request that bypassed the Fastify boundary never reaches the Runtime.
+      await enforce({
+        actorUserId: run.actorUserId,
+        agentId: agentAtStart.id,
+        action: "invoke",
+        policy: this.policy,
+        audit: this.audit,
+        checkpoint: "runtime",
+      });
       const result = await this.runner.run({
         agentId: agentAtStart.id,
+        actorUserId: run.actorUserId,
         workspacePath: agentAtStart.workspacePath,
         prompt: run.prompt,
         threadId: agentAtStart.codexThreadId,
