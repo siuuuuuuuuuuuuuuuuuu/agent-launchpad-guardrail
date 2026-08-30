@@ -90,25 +90,22 @@ Full contract, data model, and route→action map:
 
 ```mermaid
 flowchart TB
-    subgraph Experience["Experience Layer — apps/web"]
-        Switcher["Principal switcher<br/>(mock login, X-User-Id)"]
-        GrantUI["Grant / revoke panel"]
-        AuditUI["Audit log view"]
+    subgraph Experience["Experience Layer (apps/web)"]
+        UI["Principal switcher, grant/revoke panel, audit log view"]
     end
-    subgraph Control["Control Plane — apps/server (existing)"]
+    subgraph Control["Control Plane (apps/server, existing)"]
         Routes["Fastify routes"]
         Svc["AgentService"]
     end
     subgraph Guardrail["Guardrail (new)"]
-        direction TB
-        CP1["Checkpoint 1<br/>preHandler enforce(route to action)"]
-        CP2["Checkpoint 2<br/>executeRun enforce(invoke)"]
-        Policy["Identity and Policy Plane<br/>policy.ts · hasScope(user, agent, action)"]
-        Audit["Audit Layer<br/>audit-log/ · one entry per decision"]
+        CP1["Checkpoint 1: preHandler enforce, route to action"]
+        CP2["Checkpoint 2: executeRun enforce invoke"]
+        Policy["Policy Plane: policy.ts hasScope(user, agent, action)"]
+        Audit["Audit Layer: audit-log/, one entry per decision"]
     end
-    Runtime["Agent Runtime — AgentRunner to Codex (existing)"]
+    Runtime["Agent Runtime: AgentRunner to Codex (existing)"]
 
-    Experience --> Routes
+    UI --> Routes
     Routes --> CP1
     CP1 -->|allow| Svc
     Svc --> CP2
@@ -117,7 +114,7 @@ flowchart TB
     CP2 -.consults.-> Policy
     CP1 -.writes.-> Audit
     CP2 -.writes.-> Audit
-    AuditUI -.reads GET /api/audit.-> Audit
+    UI -.reads audit.-> Audit
 ```
 
 | Layer | Lives in | Owns |

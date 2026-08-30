@@ -21,6 +21,13 @@ export interface AuditRoutesOptions {
   // gate on who can read the log. left unset it's open to anyone - fine
   // for local dev, should get wired up to identity/policy before the demo.
   authorize?: (request: FastifyRequest) => boolean | Promise<boolean>;
+  // narrow the query to what this caller may see. return the filter to use
+  // (server wins over user input) or throw an error with a `statusCode` to
+  // reject. left unset, the parsed query is used as-is.
+  scope?: (
+    request: FastifyRequest,
+    filter: AuditQueryFilter,
+  ) => AuditQueryFilter | Promise<AuditQueryFilter>;
 }
 
 // GET /api/audit - filterable read api behind the frontend's log view
@@ -76,7 +83,21 @@ export function createAuditRoutes(store: AuditStore, options: AuditRoutesOptions
         ...(q.cursor !== undefined && { cursor: q.cursor }),
       };
 
-      const result = await store.query(filter);
+      let scoped = filter;
+      if (options.scope) {
+        try {
+          scoped = await options.scope(request, filter);
+        } catch (error) {
+          const status =
+            typeof (error as { statusCode?: unknown }).statusCode === "number"
+              ? (error as { statusCode: number }).statusCode
+              : 403;
+          const message = error instanceof Error ? error.message : "not authorized";
+          return reply.status(status).send({ error: message });
+        }
+      }
+
+      const result = await store.query(scoped);
       return reply.send(result);
     });
   };

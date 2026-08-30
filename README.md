@@ -45,6 +45,14 @@ Audit: `apps/server/src/audit-log/` · UI: `apps/web/src/App.tsx`
 
 ## Screenshots
 
+### Delegated access — the owner's grant panel
+
+![Delegated access panel: a live invoke + view_runs grant to Bob with a Revoke button, and a form to grant a scoped, optionally-expiring permission to another principal](docs/assets/guardrail-access-panel.jpg)
+
+### Audit log — every decision
+
+![Audit log view for one Agent: a table of decisions with allow/deny pills, actor, action, checkpoint, and reason — including a denied edit_config and a denied owner-only delete by Bob](docs/assets/guardrail-audit-log.jpg)
+
 ### Agent Playground
 
 ![Agent Playground showing lifecycle controls, starter prompts, and the Codex Runtime](docs/assets/playground.jpg)

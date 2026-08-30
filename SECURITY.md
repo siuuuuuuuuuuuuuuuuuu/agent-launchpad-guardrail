@@ -19,8 +19,10 @@ credentials, personal data, or exploit details in an issue.
   revocable grants; checked at the Fastify and `AgentRunner` boundaries; every
   decision audited). See [docs/POLICY_ENFORCEMENT.md](docs/POLICY_ENFORCEMENT.md).
   It is not a general policy engine and covers one resource type (Agents).
-- Audit log has no access control of its own beyond the shared token + a valid
-  principal; any seeded user can read the whole log.
+- Audit reads are scoped by principal: an operator (`owner-capable`) sees the
+  whole log; anyone else must name an Agent they own or hold a grant on, and an
+  untargeted query returns only their own actions. This is coarse — a grantee
+  can still see other principals' activity on a shared Agent.
 - No tenant isolation at the Runtime/container layer.
 - No CSRF protection
 - No per-Agent container boundary in ECS mode

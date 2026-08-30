@@ -110,6 +110,9 @@ export class PolicyService {
   }
 
   async createGrant(input: CreateGrantInput): Promise<Grant> {
+    // Validated here, not only in the route's zod schema, so a direct caller
+    // (the runtime checkpoint, a future internal service) can't persist a
+    // malformed grant. The HTTP path rejects most of this earlier with a 400.
     const normalizedScopes = [...new Set(input.scopes)] as Scope[];
     for (const scope of normalizedScopes) {
       if (!SCOPES.includes(scope)) {

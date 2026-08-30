@@ -262,4 +262,57 @@ describe("guardrail integration: identity → enforcement → audit", () => {
     expect(res.statusCode).toBe(401);
     await app.close();
   });
+
+  it("scopes the audit read to what the caller may see", async () => {
+    const { app } = await harness();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/agents",
+      headers: as("user-alice"),
+      payload: { name: "Scoped" },
+    });
+    const agentId = created.json().agent.id as string;
+
+    // a standard user with no grant cannot read this Agent's log.
+    const blocked = await app.inject({
+      method: "GET",
+      url: `/api/audit?target=${agentId}`,
+      headers: as("user-bob"),
+    });
+    expect(blocked.statusCode).toBe(403);
+
+    // grant Bob invoke — now canSee is true and the targeted read is allowed.
+    await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/grants`,
+      headers: as("user-alice"),
+      payload: { grantedTo: "user-bob", scopes: ["invoke"] },
+    });
+    const allowed = await app.inject({
+      method: "GET",
+      url: `/api/audit?target=${agentId}`,
+      headers: as("user-bob"),
+    });
+    expect(allowed.statusCode).toBe(200);
+
+    // an untargeted read by a standard user is narrowed to their own actions.
+    await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}`,
+      headers: as("user-bob"),
+    });
+    const mine = await app.inject({ method: "GET", url: "/api/audit", headers: as("user-bob") });
+    expect(mine.statusCode).toBe(200);
+    const rows = (mine.json() as { entries: Array<Record<string, any>> }).entries;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((e) => e.actor.id === "user-bob")).toBe(true);
+
+    // the operator (owner-capable) still sees the whole log.
+    const operator = await app.inject({ method: "GET", url: "/api/audit", headers: as("user-alice") });
+    expect(
+      (operator.json() as { entries: unknown[] }).entries.length,
+    ).toBeGreaterThan(rows.length);
+
+    await app.close();
+  });
 });

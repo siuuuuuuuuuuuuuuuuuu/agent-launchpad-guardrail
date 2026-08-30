@@ -84,7 +84,28 @@ export async function createApp(
   // bearer-token + principal gate as every other /api/* route via the
   // onRequest hooks below, even though it is registered above them
   // (app.test.ts locks that in — don't reorder without re-checking).
-  await app.register(createAuditRoutes(auditStore));
+  // `scope` narrows what each principal may read: an operator (owner-capable)
+  // sees the whole log; anyone else must name an Agent they own or can see,
+  // and an untargeted query is limited to their own actions.
+  await app.register(
+    createAuditRoutes(auditStore, {
+      scope: async (request, filter) => {
+        const actor = (request as typeof request & { actor?: User }).actor;
+        if (!actor) throw new HttpError(401, "Authentication required");
+        if (filter.targetId) {
+          const owns = service
+            .listAgents()
+            .some((agent) => agent.id === filter.targetId && agent.ownerId === actor.id);
+          if (!owns && !policy.canSee(actor.id, filter.targetId)) {
+            throw new HttpError(403, "Forbidden — you cannot view this Agent's audit log");
+          }
+          return filter;
+        }
+        if (actor.role === "owner-capable") return filter;
+        return { ...filter, actorId: actor.id };
+      },
+    }),
+  );
 
   // Coarse gate: shared operator token (unchanged from the Starter Kit).
   app.addHook("onRequest", async (request, reply) => {
