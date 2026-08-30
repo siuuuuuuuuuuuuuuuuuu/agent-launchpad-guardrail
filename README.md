@@ -11,8 +11,24 @@ Volcengine ECS.
 
 This fork adds **per-Agent delegated, revocable, scoped access control**,
 enforced at the backend and Runtime boundary (not the UI), with a full audit
-trail of every decision. Design, data model, route→action map, and demo:
-[docs/POLICY_ENFORCEMENT.md](docs/POLICY_ENFORCEMENT.md).
+trail of every decision.
+
+- Every Agent has an owner. Owners issue **scoped, time-bound, revocable**
+  grants (`invoke`, `view_config`, `edit_config`, `view_runs`).
+- Every Agent-touching request passes `hasScope(user, agent, action)` at the
+  Fastify boundary **and again** at the `AgentRunner` boundary before Codex runs.
+- Every decision — grant, allow, deny, revoke — is written to a queryable audit
+  log. Revocation takes effect on the caller's next request.
+
+| What | Where |
+| --- | --- |
+| Contract, data model, route→action map | [docs/POLICY_ENFORCEMENT.md](docs/POLICY_ENFORCEMENT.md) |
+| Layered architecture diagram | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#guardrail-bouncer-track) |
+| 3-minute demo script | [docs/DEMO.md](docs/DEMO.md) |
+| Scripted end-to-end walkthrough | `./scripts/guardrail-demo.sh` |
+
+Enforcement: `apps/server/src/enforcement.ts` · Policy: `apps/server/src/policy.ts` ·
+Audit: `apps/server/src/audit-log/` · UI: `apps/web/src/App.tsx`
 
 > [!WARNING]
 > This is a single-user proof of concept. It intentionally has no identity,
@@ -244,9 +260,17 @@ terraform fmt -check -recursive deploy/volcengine
 docker compose config
 ```
 
+Guardrail scenario, end to end (server must be running):
+
+```bash
+./scripts/guardrail-demo.sh
+```
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Policy enforcement — contract & wiring](docs/POLICY_ENFORCEMENT.md)
+- [Demo script](docs/DEMO.md)
 - [Local POC](docs/LOCAL_POC.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Hackathon extension guide](docs/HACKATHON_EXTENSION_GUIDE.md)

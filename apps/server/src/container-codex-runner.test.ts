@@ -1,9 +1,15 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 import {
   buildContainerRunArgs,
   containerName,
 } from "./container-codex-runner.js";
+
+// config.ts runs CODEX_HOME through path.resolve(), so the bind-mount source is
+// the resolved path. Mirror that here instead of hard-coding a POSIX path — on
+// Windows path.resolve("/tmp/codex-home") is "C:\\tmp\\codex-home".
+const codexHomeMount = "type=bind,src=" + path.resolve("/tmp/codex-home") + ",dst=/codex-home";
 
 describe("Container Codex runner", () => {
   it("builds an isolated Docker/Podman-compatible invocation", () => {
@@ -33,7 +39,7 @@ describe("Container Codex runner", () => {
     );
     expect(args).toContain("runtime:test");
     expect(args).toContain("type=bind,src=/tmp/agent-workspace,dst=/workspace");
-    expect(args).toContain("type=bind,src=/tmp/codex-home,dst=/codex-home");
+    expect(args).toContain(codexHomeMount);
     expect(args).toContain("501:20");
     expect(args).toContain("workspace-write");
     expect(args).toContain("/workspace");

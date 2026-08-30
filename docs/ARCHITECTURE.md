@@ -80,3 +80,55 @@ the stored Codex thread, and escalate termination after a grace period.
 
 The current container or ECS instance is the POC trust boundary. Ordinary
 containers are not hardened multi-tenant isolation.
+
+## Guardrail (Bouncer track)
+
+This fork implements the Bouncer track: per-Agent delegated, revocable, scoped
+access control, enforced server-side with an audit trail of every decision.
+Full contract, data model, and route→action map:
+[POLICY_ENFORCEMENT.md](POLICY_ENFORCEMENT.md).
+
+```mermaid
+flowchart TB
+    subgraph Experience["Experience Layer — apps/web"]
+        Switcher["Principal switcher<br/>(mock login, X-User-Id)"]
+        GrantUI["Grant / revoke panel"]
+        AuditUI["Audit log view"]
+    end
+    subgraph Control["Control Plane — apps/server (existing)"]
+        Routes["Fastify routes"]
+        Svc["AgentService"]
+    end
+    subgraph Guardrail["Guardrail (new)"]
+        direction TB
+        CP1["Checkpoint 1<br/>preHandler enforce(route to action)"]
+        CP2["Checkpoint 2<br/>executeRun enforce(invoke)"]
+        Policy["Identity and Policy Plane<br/>policy.ts · hasScope(user, agent, action)"]
+        Audit["Audit Layer<br/>audit-log/ · one entry per decision"]
+    end
+    Runtime["Agent Runtime — AgentRunner to Codex (existing)"]
+
+    Experience --> Routes
+    Routes --> CP1
+    CP1 -->|allow| Svc
+    Svc --> CP2
+    CP2 -->|allow| Runtime
+    CP1 -.consults.-> Policy
+    CP2 -.consults.-> Policy
+    CP1 -.writes.-> Audit
+    CP2 -.writes.-> Audit
+    AuditUI -.reads GET /api/audit.-> Audit
+```
+
+| Layer | Lives in | Owns |
+| --- | --- | --- |
+| Identity | `apps/server/src/app.ts` onRequest hook, `seed.ts` | `X-User-Id` → seeded principal; unknown/missing → 401 |
+| Policy | `apps/server/src/policy.ts` | `hasScope(user, agentId, action)`; owner-only `delete`/`grant`/`revoke`; live-grant lookup |
+| Enforcement | `apps/server/src/enforcement.ts` | route→action `RULES`, `enforce()` at both checkpoints |
+| Audit | `apps/server/src/audit-log/` | append + query store, redaction, `GET /api/audit` |
+| Experience | `apps/web/src/App.tsx` | principal switcher, grant/revoke UI, audit view, allow/deny feedback |
+
+Key property: checkpoint 2 re-runs the check at the `AgentRunner` boundary, so a
+request that bypasses the HTTP layer (a direct `AgentService` call) still cannot
+reach Codex. Revocation is a pure read over the store snapshot, so it takes
+effect on the caller's next request.
