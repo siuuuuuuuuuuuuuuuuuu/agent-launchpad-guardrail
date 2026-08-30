@@ -1,4 +1,13 @@
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type {
+  Agent,
+  AgentRun,
+  AuditPage,
+  Grant,
+  Message,
+  Scope,
+  SystemInfo,
+  User,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -10,15 +19,22 @@ export class ApiError extends Error {
 }
 
 let authToken = "";
+let currentUserId = "";
 
 export function setAuthToken(token: string): void {
   authToken = token.trim();
+}
+
+/** Mock identity: the selected principal is sent on every request as X-User-Id. */
+export function setCurrentUser(userId: string): void {
+  currentUserId = userId.trim();
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers = {
     ...(options?.body ? { "Content-Type": "application/json" } : {}),
     ...(authToken ? { Authorization: "Bearer " + authToken } : {}),
+    ...(currentUserId ? { "X-User-Id": currentUserId } : {}),
     ...options?.headers,
   };
   const response = await fetch(url, {
@@ -78,4 +94,31 @@ export const api = {
       },
     ),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
+
+  // Identity & Policy plane
+  users: () => request<{ users: User[] }>("/api/users"),
+  me: () => request<{ user: User }>("/api/me"),
+  grants: (agentId: string) =>
+    request<{ grants: Grant[] }>("/api/agents/" + agentId + "/grants"),
+  createGrant: (
+    agentId: string,
+    body: { grantedTo: string; scopes: Scope[]; expiresAt?: string },
+  ) =>
+    request<{ grant: Grant }>("/api/agents/" + agentId + "/grants", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  revokeGrant: (agentId: string, grantId: string) =>
+    request<{ grant: Grant }>(
+      "/api/agents/" + agentId + "/grants/" + grantId,
+      { method: "DELETE" },
+    ),
+  // GET /api/audit — filters: actor, action, target, decision, from, to, limit, cursor
+  audit: (params: Record<string, string> = {}) =>
+    request<AuditPage>(
+      "/api/audit" +
+        (Object.keys(params).length
+          ? "?" + new URLSearchParams(params).toString()
+          : ""),
+    ),
 };

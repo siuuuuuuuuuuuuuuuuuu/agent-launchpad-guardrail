@@ -4,16 +4,22 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import type { AppConfig } from "./config.js";
-import { HttpError } from "./errors.js";
 import type { AgentService } from "./agent-service.js";
 import { AuditLogger } from "./audit-log/logger.js";
 import { createAuditRoutes } from "./audit-log/routes.js";
 import type { AuditStore } from "./audit-log/types.js";
+import type { AppConfig } from "./config.js";
+import { enforce, matchRule } from "./enforcement.js";
+import { HttpError } from "./errors.js";
+import type { PolicyService } from "./policy.js";
+import type { User } from "./types.js";
 
-// lets any route handler reach `request.server.auditLogger.record(...)`
-// without having to thread it through every function signature
 declare module "fastify" {
+  interface FastifyRequest {
+    actor?: User;
+  }
+  // lets any route handler reach `request.server.auditLogger.record(...)`
+  // without having to thread it through every function signature
   interface FastifyInstance {
     auditLogger: AuditLogger;
   }
@@ -21,6 +27,10 @@ declare module "fastify" {
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
+const grantParams = z.object({
+  id: z.string().uuid(),
+  grantId: z.string().uuid(),
+});
 const createAgentBody = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(),
@@ -33,11 +43,23 @@ const updateAgentBody = createAgentBody.partial().refine(
 const messageBody = z.object({
   content: z.string().trim().min(1).max(50_000),
 });
+const createGrantBody = z.object({
+  grantedTo: z.string().trim().min(1),
+  scopes: z
+    .array(z.enum(["invoke", "view_config", "edit_config", "view_runs"]))
+    .min(1),
+  expiresAt: z.string().datetime().optional(),
+});
+
+// `/api/users` is the mock principal roster the switcher needs before a
+// principal is chosen — no secrets, safe to expose past the identity gate.
+const PUBLIC_PATHS = new Set(["/api/health", "/api/auth", "/api/users"]);
 
 export async function createApp(
   config: AppConfig,
   service: AgentService,
   auditStore: AuditStore,
+  policy: PolicyService,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
@@ -52,19 +74,19 @@ export async function createApp(
       config.nodeEnv === "development"
         ? ["http://localhost:5173", "http://127.0.0.1:5173"]
         : false,
+    allowedHeaders: ["authorization", "content-type", "x-user-id"],
   });
 
   const auditLogger = new AuditLogger(auditStore);
   app.decorate("auditLogger", auditLogger);
 
-  // GET /api/audit — inherits the same bearer-token gate as every other
-  // /api/* route below via the onRequest hook, even though it's registered
-  // above it. app.test.ts locks that in; don't reorder these without
-  // checking it still passes, or the audit log becomes world-readable.
-  // Tighten further with createAuditRoutes(store, { authorize }) once
-  // there's a real per-user model to check against.
+  // GET /api/audit — read API for the audit-log view. Inherits the same
+  // bearer-token + principal gate as every other /api/* route via the
+  // onRequest hooks below, even though it is registered above them
+  // (app.test.ts locks that in — don't reorder without re-checking).
   await app.register(createAuditRoutes(auditStore));
 
+  // Coarse gate: shared operator token (unchanged from the Starter Kit).
   app.addHook("onRequest", async (request, reply) => {
     if (
       !config.authToken ||
@@ -86,6 +108,48 @@ export async function createApp(
     }
   });
 
+  // Principal resolution: mock identity via the X-User-Id header, checked
+  // against the mock user table. No production auth — intentional per scope.
+  app.addHook("onRequest", async (request, reply) => {
+    const path = request.url.split("?")[0] ?? "";
+    if (!path.startsWith("/api/") || PUBLIC_PATHS.has(path)) {
+      return;
+    }
+    const headerValue = request.headers["x-user-id"];
+    const userId = (Array.isArray(headerValue) ? headerValue[0] : headerValue)?.trim();
+    const user = userId ? policy.getUser(userId) : undefined;
+    if (!user) {
+      return reply
+        .code(401)
+        .send({ error: "Unknown or missing X-User-Id principal" });
+    }
+    request.actor = user;
+  });
+
+  // Enforcement Point — checkpoint 1: every Agent-touching route resolves to
+  // one Action and passes hasScope() before its handler runs.
+  app.addHook("preHandler", async (request) => {
+    const rule = matchRule(request.method, request.routeOptions.url);
+    if (!rule) return;
+    const actor = request.actor;
+    if (!actor) throw new HttpError(401, "Authentication required");
+
+    const params = (request.params ?? {}) as Record<string, string>;
+    const agentId =
+      rule.agentIdFrom === "run.id"
+        ? service.findRunAgentId(params.id ?? "")
+        : (params.id ?? null);
+
+    await enforce({
+      actorUserId: actor.id,
+      agentId,
+      action: rule.action,
+      policy,
+      audit: auditLogger,
+      checkpoint: "request",
+    });
+  });
+
   app.get("/api/health", async () => ({
     ok: true,
     service: "volc-agent-launchpad",
@@ -93,13 +157,31 @@ export async function createApp(
 
   app.get("/api/auth", async () => ({ required: config.authToken.length > 0 }));
 
+  app.get("/api/users", async () => ({ users: policy.listUsers() }));
+
+  app.get("/api/me", async (request) => ({ user: request.actor }));
+
   app.get("/api/system", async () => service.systemInfo());
 
-  app.get("/api/agents", async () => ({ agents: service.listAgents() }));
+  app.get("/api/agents", async (request) => {
+    const actor = request.actor!;
+    const agents = service
+      .listAgents()
+      .filter((agent) => agent.ownerId === actor.id || policy.canSee(actor.id, agent.id));
+    return { agents };
+  });
 
   app.post("/api/agents", async (request, reply) => {
     const body = createAgentBody.parse(request.body);
-    const agent = await service.createAgent(body);
+    const actor = request.actor!;
+    const agent = await service.createAgent(body, actor.id);
+    await auditLogger.record({
+      actor: { id: actor.id, type: "human" },
+      action: "create",
+      target: { type: "agent", id: agent.id },
+      decision: "allow",
+      payload: { owner: actor.id, checkpoint: "request" },
+    });
     return reply.code(201).send({ agent });
   });
 
@@ -142,13 +224,64 @@ export async function createApp(
   app.post("/api/agents/:id/messages", async (request, reply) => {
     const { id } = agentIdParams.parse(request.params);
     const body = messageBody.parse(request.body);
-    const result = await service.sendMessage(id, body.content);
+    const result = await service.sendMessage(id, body.content, request.actor!.id);
     return reply.code(202).send(result);
   });
 
   app.get("/api/runs/:id", async (request) => {
     const { id } = runIdParams.parse(request.params);
     return { run: service.getRun(id) };
+  });
+
+  // Grant management (owner-only, enforced by the "grant"/"revoke" Actions).
+  app.get("/api/agents/:id/grants", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    return { grants: policy.listGrants(id) };
+  });
+
+  app.post("/api/agents/:id/grants", async (request, reply) => {
+    const { id } = agentIdParams.parse(request.params);
+    const body = createGrantBody.parse(request.body);
+    const actor = request.actor!;
+    const grant = await policy.createGrant({
+      agentId: id,
+      grantedTo: body.grantedTo,
+      grantedBy: actor.id,
+      scopes: body.scopes,
+      expiresAt: body.expiresAt ?? null,
+    });
+    await auditLogger.record({
+      actor: { id: actor.id, type: "human" },
+      action: "grant",
+      target: { type: "agent", id },
+      decision: "allow",
+      payload: {
+        grantId: grant.id,
+        grantedTo: body.grantedTo,
+        scopes: body.scopes,
+        checkpoint: "request",
+      },
+    });
+    return reply.code(201).send({ grant });
+  });
+
+  app.delete("/api/agents/:id/grants/:grantId", async (request) => {
+    const { id, grantId } = grantParams.parse(request.params);
+    const actor = request.actor!;
+    const grant = await policy.revokeGrant(id, grantId);
+    await auditLogger.record({
+      actor: { id: actor.id, type: "human" },
+      action: "revoke",
+      target: { type: "agent", id },
+      decision: "allow",
+      payload: {
+        grantId,
+        grantedTo: grant.grantedTo,
+        scopes: grant.scopes,
+        checkpoint: "request",
+      },
+    });
+    return { grant };
   });
 
   if (config.nodeEnv === "production") {

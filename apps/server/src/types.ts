@@ -2,11 +2,34 @@ export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type MessageRole = "user" | "assistant";
 
+export type UserRole = "owner-capable" | "standard";
+export type Scope = "invoke" | "view_config" | "edit_config" | "view_runs";
+
+export interface User {
+  id: string;
+  name: string;
+  role: UserRole;
+}
+
+export interface Grant {
+  id: string;
+  agentId: string;
+  grantedTo: string;
+  grantedBy: string;
+  scopes: Scope[];
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+// Audit entry shape lives in ./audit-log/types.ts (owned by the Audit subsystem).
+
 export interface Agent {
   id: string;
   name: string;
   description: string;
   instructions: string;
+  ownerId: string;
   status: AgentStatus;
   workspacePath: string;
   codexThreadId: string | null;
@@ -33,6 +56,7 @@ export interface RunUsage {
 export interface AgentRun {
   id: string;
   agentId: string;
+  actorUserId: string;
   status: RunStatus;
   prompt: string;
   output: string | null;
@@ -44,10 +68,12 @@ export interface AgentRun {
 }
 
 export interface Database {
-  version: 1;
+  version: 2;
+  users: User[];
   agents: Agent[];
   messages: Message[];
   runs: AgentRun[];
+  grants: Grant[];
 }
 
 export interface CreateAgentInput {
@@ -70,6 +96,7 @@ export interface RunnerResult {
 
 export interface RunnerRequest {
   agentId: string;
+  actorUserId: string;
   workspacePath: string;
   prompt: string;
   threadId: string | null;

@@ -7,6 +7,13 @@ Volcengine Ark Responses API.
 Run it locally with Docker, Colima, or rootless Podman, or deploy it to
 Volcengine ECS.
 
+## Selected track: Bouncer — identity & authorization
+
+This fork adds **per-Agent delegated, revocable, scoped access control**,
+enforced at the backend and Runtime boundary (not the UI), with a full audit
+trail of every decision. Design, data model, route→action map, and demo:
+[docs/POLICY_ENFORCEMENT.md](docs/POLICY_ENFORCEMENT.md).
+
 > [!WARNING]
 > This is a single-user proof of concept. It intentionally has no identity,
 > tracing, audit, or hardened sandbox middleware. Do not use production data or
