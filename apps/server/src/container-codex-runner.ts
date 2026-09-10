@@ -2,7 +2,7 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { AppConfig } from "./config.js";
 import { buildCodexArgs, parseCodexEventLine } from "./codex-runner.js";
-import { RunCancelledError } from "./errors.js";
+import { GuardrailError, RunCancelledError } from "./errors.js";
 import type {
   AgentRunner,
   RunUsage,
@@ -18,6 +18,7 @@ interface ActiveContainer {
   cancelled: boolean;
   timedOut: boolean;
   outputExceeded: boolean;
+  guardrailBlock: string | null;
   settled: Promise<void>;
   termination: Promise<void> | null;
 }
@@ -161,10 +162,18 @@ export class ContainerCodexRunner implements AgentRunner {
       cancelled: false,
       timedOut: false,
       outputExceeded: false,
+      guardrailBlock: null,
       settled,
       termination: null,
     };
     this.active.set(request.agentId, active);
+
+    const onAction = (event: Parameters<NonNullable<RunnerRequest["onAction"]>>[0]) => {
+      if (active.guardrailBlock || !request.onAction) return;
+      if (request.onAction(event).allow) return;
+      active.guardrailBlock = event.kind + ": " + event.value;
+      void this.removeContainer(active);
+    };
 
     const parsed: ParsedEvents = {
       messages: [],
@@ -187,7 +196,7 @@ export class ContainerCodexRunner implements AgentRunner {
         stdout += chunk.toString("utf8");
         const lines = stdout.split(/\r?\n/);
         stdout = lines.pop() ?? "";
-        for (const line of lines) parseCodexEventLine(line, parsed);
+        for (const line of lines) parseCodexEventLine(line, parsed, onAction);
       } else {
         stderr += chunk.toString("utf8");
         if (stderr.length > 16_384) stderr = stderr.slice(-16_384);
@@ -208,8 +217,13 @@ export class ContainerCodexRunner implements AgentRunner {
         child.once("error", reject);
         child.once("close", (code) => resolve(code ?? 1));
       });
-      if (stdout.trim()) parseCodexEventLine(stdout.trim(), parsed);
+      if (stdout.trim()) parseCodexEventLine(stdout.trim(), parsed, onAction);
       if (active.cancelled) throw new RunCancelledError();
+      if (active.guardrailBlock) {
+        throw new GuardrailError(
+          "Run blocked by a runtime guardrail — " + active.guardrailBlock,
+        );
+      }
       if (active.timedOut) {
         throw new Error("Runtime timed out after " + this.config.codexTimeoutMs + " ms");
       }

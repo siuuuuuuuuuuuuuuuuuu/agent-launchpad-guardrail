@@ -240,6 +240,72 @@ describe("Enforcement Point — request boundary", () => {
     expect(res.statusCode).toBe(401);
     await app.close();
   });
+
+  it("gates the guardrail policy routes by config scope", async () => {
+    const { app, auditStore } = await harness();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/agents",
+      headers: as("user-alice"),
+      payload: { name: "Guarded" },
+    });
+    const agentId = created.json().agent.id as string;
+
+    // A non-owner with no grant cannot read or write the policy.
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/agents/" + agentId + "/guardrail",
+          headers: as("user-bob"),
+        })
+      ).statusCode,
+    ).toBe(403);
+    const bobWrite = await app.inject({
+      method: "PUT",
+      url: "/api/agents/" + agentId + "/guardrail",
+      headers: as("user-bob"),
+      payload: { sandboxMode: "workspace-write", networkAccess: false, rules: [] },
+    });
+    expect(bobWrite.statusCode).toBe(403);
+
+    // The owner can, and the change is audited under policy.guardrail_update.
+    const ok = await app.inject({
+      method: "PUT",
+      url: "/api/agents/" + agentId + "/guardrail",
+      headers: as("user-alice"),
+      payload: {
+        sandboxMode: "read-only",
+        networkAccess: false,
+        rules: [
+          { kind: "command_pattern", pattern: "git\\s+push", effect: "deny", message: "no push" },
+        ],
+      },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().policy.sandboxMode).toBe("read-only");
+
+    const { entries } = await auditStore.query({
+      targetId: agentId,
+      action: "policy.guardrail_update",
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.decision).toBe("allow");
+
+    // An invalid regex is a 400, not a 500.
+    const bad = await app.inject({
+      method: "PUT",
+      url: "/api/agents/" + agentId + "/guardrail",
+      headers: as("user-alice"),
+      payload: {
+        sandboxMode: "read-only",
+        networkAccess: false,
+        rules: [{ kind: "command_pattern", pattern: "(", effect: "deny", message: "x" }],
+      },
+    });
+    expect(bad.statusCode).toBe(400);
+    await app.close();
+  });
 });
 
 describe("Enforcement Point — runtime boundary", () => {

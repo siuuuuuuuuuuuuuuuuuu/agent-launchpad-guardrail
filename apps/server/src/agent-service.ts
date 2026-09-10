@@ -3,7 +3,9 @@ import type { AuditLogger } from "./audit-log/logger.js";
 import type { AppConfig } from "./config.js";
 import { isArkConfigured } from "./config.js";
 import { enforce } from "./enforcement.js";
-import { HttpError, RunCancelledError } from "./errors.js";
+import { GuardrailError, HttpError, RunCancelledError } from "./errors.js";
+import { GuardrailEngine, type GuardrailDecision } from "./guardrail/engine.js";
+import { defaultGuardrailPolicy } from "./guardrail/policy-defaults.js";
 import type { PolicyService } from "./policy.js";
 import { JsonStore } from "./store.js";
 import type {
@@ -11,7 +13,10 @@ import type {
   AgentRun,
   AgentRunner,
   CreateAgentInput,
+  GuardrailActionVerdict,
+  GuardrailPolicy,
   Message,
+  RuntimeActionEvent,
   UpdateAgentInput,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
@@ -22,6 +27,8 @@ export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
   private readonly cancellationRequests = new Set<string>();
 
+  private readonly engine: GuardrailEngine;
+
   constructor(
     private readonly config: AppConfig,
     private readonly store: JsonStore,
@@ -29,7 +36,15 @@ export class AgentService {
     private readonly runner: AgentRunner,
     private readonly policy: PolicyService,
     private readonly audit: AuditLogger,
-  ) {}
+    engine?: GuardrailEngine,
+  ) {
+    this.engine = engine ?? GuardrailEngine.fromConfig(config);
+  }
+
+  /** The runtime guardrail engine, exposed for the policy-editing routes. */
+  get guardrail(): GuardrailEngine {
+    return this.engine;
+  }
 
   async initialize(): Promise<void> {
     await this.store.initialize();
@@ -85,6 +100,7 @@ export class AgentService {
       workspacePath: this.workspaces.workspacePath(id),
       codexThreadId: null,
       lastError: null,
+      guardrailPolicy: defaultGuardrailPolicy(timestamp),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -115,6 +131,32 @@ export class AgentService {
     });
     await this.workspaces.writeInstructions(updated);
     return updated;
+  }
+
+  getGuardrailPolicy(id: string): GuardrailPolicy {
+    return this.getAgent(id).guardrailPolicy;
+  }
+
+  /** Replace an Agent's guardrail policy. Validated + normalised by the engine. */
+  async setGuardrailPolicy(
+    id: string,
+    input: Parameters<GuardrailEngine["normalizePolicyInput"]>[0],
+  ): Promise<GuardrailPolicy> {
+    const current = this.getAgent(id);
+    if (current.status === "busy") {
+      throw new HttpError(409, "Stop the active run before editing guardrails");
+    }
+    const normalized = this.engine.normalizePolicyInput(input);
+    return this.store.mutate((database) => {
+      const agent = database.agents.find((item) => item.id === id);
+      if (!agent) throw new HttpError(404, "Agent not found");
+      if (agent.status === "busy") {
+        throw new HttpError(409, "Stop the active run before editing guardrails");
+      }
+      agent.guardrailPolicy = normalized;
+      agent.updatedAt = now();
+      return structuredClone(normalized);
+    });
   }
 
   async deleteAgent(id: string): Promise<{ archivedWorkspace: string }> {
@@ -235,6 +277,7 @@ export class AgentService {
       arkModel: this.config.arkModel || null,
       codexAvailable: await this.runner.isAvailable(),
       codexSandboxMode: this.config.codexSandboxMode,
+      guardrailMode: this.config.guardrailMode,
       runtimeProvider: this.config.runtimeProvider,
       containerEngine:
         this.config.runtimeProvider === "container"
@@ -255,13 +298,15 @@ export class AgentService {
         storedRun.startedAt = now();
       }
     });
+
+    const runtimeAudits: Promise<unknown>[] = [];
     try {
       if (this.cancellationRequests.has(agentAtStart.id)) {
         throw new RunCancelledError();
       }
-      // Second checkpoint: re-verify at the Runtime boundary. A grant revoked
-      // between request admission and Codex invocation is refused here, and a
-      // request that bypassed the Fastify boundary never reaches the Runtime.
+      // Checkpoint 2 (authorization): re-verify at the Runtime boundary. A grant
+      // revoked between request admission and Codex invocation is refused here,
+      // and a request that bypassed the Fastify boundary never reaches Codex.
       await enforce({
         actorUserId: run.actorUserId,
         agentId: agentAtStart.id,
@@ -270,20 +315,107 @@ export class AgentService {
         audit: this.audit,
         checkpoint: "runtime",
       });
+
+      const policy = agentAtStart.guardrailPolicy;
+
+      // Guardrail A — screen the prompt + instructions before Codex starts.
+      const preflight = this.engine.evaluatePrompt(
+        policy,
+        run.prompt,
+        agentAtStart.instructions,
+      );
+      await this.recordGuardrail(
+        agentAtStart.id,
+        { id: run.actorUserId, type: "human" },
+        "guardrail.prompt",
+        "guardrail-preflight",
+        preflight,
+        run.prompt,
+      );
+      if (!preflight.proceed) {
+        throw new GuardrailError(
+          "Prompt blocked by a runtime guardrail — " + preflight.reason,
+          preflight.ruleId,
+        );
+      }
+
+      // Guardrail B — the sandbox mode + network flag actually handed to Codex.
+      const sandbox = this.engine.resolveSandbox(policy);
+
+      // Guardrail C — live monitor: evaluate every command / file change / tool
+      // call as it streams back; a deny verdict aborts the run.
+      const seen = new Set<string>();
+      const onAction = (event: RuntimeActionEvent): GuardrailActionVerdict => {
+        const decision = this.engine.evaluateAction(
+          policy,
+          event,
+          agentAtStart.workspacePath,
+        );
+        if (decision.effect !== "none") {
+          const key = event.kind + "\0" + event.value + "\0" + decision.effect;
+          if (!seen.has(key)) {
+            seen.add(key);
+            runtimeAudits.push(
+              this.recordGuardrail(
+                agentAtStart.id,
+                { id: agentAtStart.id, type: "agent" },
+                "guardrail." + event.kind,
+                "guardrail-runtime",
+                decision,
+                event.value,
+              ),
+            );
+          }
+        }
+        return { allow: decision.proceed };
+      };
+
       const result = await this.runner.run({
         agentId: agentAtStart.id,
         actorUserId: run.actorUserId,
         workspacePath: agentAtStart.workspacePath,
         prompt: run.prompt,
         threadId: agentAtStart.codexThreadId,
+        sandboxMode: sandbox.sandboxMode,
+        networkAccess: sandbox.networkAccess,
+        onAction,
       });
+      await Promise.allSettled(runtimeAudits);
+
+      // Guardrail D — screen the final agent message before it is stored.
+      const screen = this.engine.screenOutput(policy, result.output);
+      if (screen.matched.length > 0) {
+        const outcome: Pick<
+          GuardrailDecision,
+          "proceed" | "effect" | "reason" | "ruleId"
+        > = {
+          proceed: screen.proceed,
+          effect: screen.proceed ? "flag" : "deny",
+          reason: screen.reason,
+        };
+        const matchedRuleId = screen.matched[0]?.ruleId;
+        if (matchedRuleId) outcome.ruleId = matchedRuleId;
+        await this.recordGuardrail(
+          agentAtStart.id,
+          { id: agentAtStart.id, type: "agent" },
+          "guardrail.output",
+          "guardrail-output",
+          outcome,
+          screen.redactions + " sensitive span(s)",
+        );
+      }
+      if (!screen.proceed) {
+        throw new GuardrailError("Output blocked by a runtime guardrail — " + screen.reason);
+      }
+      const finalOutput = screen.output;
+
       const completedAt = now();
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
         const agent = database.agents.find((item) => item.id === agentAtStart.id);
         if (!storedRun || !agent) return;
         storedRun.status = "completed";
-        storedRun.output = result.output;
+        storedRun.output = finalOutput;
         storedRun.usage = result.usage;
         storedRun.completedAt = completedAt;
         database.messages.push({
@@ -291,7 +423,7 @@ export class AgentService {
           agentId: agent.id,
           runId: run.id,
           role: "assistant",
-          content: result.output,
+          content: finalOutput,
           createdAt: completedAt,
         });
         agent.status = "ready";
@@ -300,26 +432,54 @@ export class AgentService {
         agent.updatedAt = completedAt;
       });
     } catch (error) {
+      await Promise.allSettled(runtimeAudits);
       const completedAt = now();
       const cancelled = error instanceof RunCancelledError;
+      const blocked = error instanceof GuardrailError;
       const message = error instanceof Error ? error.message : String(error);
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
         const agent = database.agents.find((item) => item.id === agentAtStart.id);
         if (storedRun) {
-          storedRun.status = cancelled ? "cancelled" : "failed";
+          storedRun.status = cancelled ? "cancelled" : blocked ? "blocked" : "failed";
           storedRun.error = message;
           storedRun.completedAt = completedAt;
         }
         if (agent) {
           if (agent.status !== "stopped") {
-            agent.status = cancelled ? "ready" : "error";
+            // A guardrail block is not an Agent fault — it returns to ready.
+            agent.status = cancelled || blocked ? "ready" : "error";
           }
-          agent.lastError = cancelled ? null : message;
+          agent.lastError = cancelled || blocked ? null : message;
           agent.updatedAt = completedAt;
         }
       });
     }
+  }
+
+  /** Write one audit entry for a non-clean guardrail decision. */
+  private async recordGuardrail(
+    agentId: string,
+    actor: { id: string; type: "human" | "agent" },
+    action: string,
+    checkpoint: string,
+    decision: Pick<GuardrailDecision, "proceed" | "effect" | "reason" | "ruleId">,
+    value: string,
+  ): Promise<void> {
+    if (decision.effect === "none") return;
+    await this.audit.record({
+      actor,
+      action,
+      target: { type: "agent", id: agentId },
+      decision: decision.effect === "deny" ? "deny" : "allow",
+      payload: {
+        checkpoint,
+        ruleId: decision.ruleId ?? null,
+        reason: decision.reason,
+        enforced: decision.effect === "deny" ? !decision.proceed : true,
+        value: value.length > 200 ? value.slice(0, 200) + "…" : value,
+      },
+    });
   }
 
   private async setStatus(id: string, status: Agent["status"]): Promise<Agent> {

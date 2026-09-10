@@ -1,8 +1,53 @@
 export type AgentStatus = "ready" | "busy" | "stopped" | "error";
-export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "blocked";
 
 export type UserRole = "owner-capable" | "standard";
 export type Scope = "invoke" | "view_config" | "edit_config" | "view_runs";
+
+export type GuardrailSandboxMode = "read-only" | "workspace-write";
+export type GuardrailRuleKind =
+  | "prompt_pattern"
+  | "command_pattern"
+  | "path_pattern"
+  | "output_pattern";
+export type GuardrailEffect = "deny" | "flag";
+
+export interface GuardrailRule {
+  id: string;
+  kind: GuardrailRuleKind;
+  pattern: string;
+  effect: GuardrailEffect;
+  message: string;
+  builtin?: boolean;
+}
+
+export interface GuardrailPolicy {
+  sandboxMode: GuardrailSandboxMode;
+  networkAccess: boolean;
+  rules: GuardrailRule[];
+  updatedAt: string;
+}
+
+export interface GuardrailPolicyResponse {
+  policy: GuardrailPolicy;
+  baseline: GuardrailRule[];
+  mode: "enforce" | "monitor" | "off";
+  sandboxCeiling: GuardrailSandboxMode;
+}
+
+/** The editable slice of a rule the UI sends back. */
+export interface GuardrailRuleInput {
+  kind: GuardrailRuleKind;
+  pattern: string;
+  effect: GuardrailEffect;
+  message: string;
+}
 
 export interface User {
   id: string;
@@ -47,6 +92,7 @@ export interface Agent {
   workspacePath: string;
   codexThreadId: string | null;
   lastError: string | null;
+  guardrailPolicy: GuardrailPolicy;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +127,7 @@ export interface SystemInfo {
   arkModel: string | null;
   codexAvailable: boolean;
   codexSandboxMode: string;
+  guardrailMode: "enforce" | "monitor" | "off";
   runtimeProvider: "local-process" | "container";
   containerEngine: string | null;
   runtime: string;

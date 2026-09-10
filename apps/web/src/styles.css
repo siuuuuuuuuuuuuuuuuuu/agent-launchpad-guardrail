@@ -1567,3 +1567,64 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* Runtime guardrails */
+.grant-state-deny {
+  color: var(--red);
+}
+
+.grant-state-flag {
+  color: var(--amber, #b7791f);
+}
+
+.guardrail-mode-warn {
+  border-left: 3px solid var(--amber, #b7791f);
+  padding-left: 10px;
+}
+
+.guardrail-subhead {
+  margin: 18px 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.guardrail-rule-deny {
+  border-left: 3px solid var(--red);
+}
+
+.guardrail-rule-flag {
+  border-left: 3px solid var(--amber, #b7791f);
+}
+
+.guardrail-pattern,
+.guardrail-baseline-msg {
+  font-size: 12px;
+  color: var(--text, inherit);
+  overflow-wrap: anywhere;
+}
+
+.guardrail-pattern {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.guardrail-grow {
+  grid-column: 1 / -1;
+}
+
+.guardrail-baseline {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.guardrail-baseline summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-blocked {
+  border-color: var(--amber, #b7791f);
+}

@@ -36,12 +36,13 @@ Every call to `enforce()` writes one audit entry via the audit subsystem's
 | Type | Key fields |
 | --- | --- |
 | `User` | `id`, `name`, `role: "owner-capable" \| "standard"` |
-| `Agent` (extended) | `+ ownerId` — set to the creator, backfilled by store migration |
+| `Agent` (extended) | `+ ownerId` — set to the creator, backfilled by store migration; `+ guardrailPolicy` — see [RUNTIME_GUARDRAILS.md](RUNTIME_GUARDRAILS.md) |
 | `Grant` | `agentId`, `grantedTo`, `grantedBy`, `scopes: Scope[]`, `expiresAt`, `revokedAt` |
 | `AuditEntry` | owned by `apps/server/src/audit-log/types.ts`: `actor{id,type}`, `action`, `target{type,id}`, `decision`, `payload`, `timestamp` |
 
-`Scope = "invoke" | "view_config" | "edit_config" | "view_runs"`. Store bumped
-to `version: 2`; v1 files migrate on load (agents/runs get a fallback owner).
+`Scope = "invoke" | "view_config" | "edit_config" | "view_runs"`. Store is at
+`version: 3`; older files migrate on load (v1→v2 agents/runs get a fallback
+owner, v2→v3 agents get the default guardrail policy).
 
 ## The one primitive
 

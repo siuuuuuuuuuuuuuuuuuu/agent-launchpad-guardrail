@@ -2,10 +2,11 @@ import { execFile } from "node:child_process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { AppConfig } from "./config.js";
-import { RunCancelledError } from "./errors.js";
+import { GuardrailError, RunCancelledError } from "./errors.js";
 import type {
   AgentRunner,
   RunUsage,
+  RuntimeActionEvent,
   RunnerRequest,
   RunnerResult,
 } from "./types.js";
@@ -20,10 +21,14 @@ export interface ParsedEvents {
 }
 
 export function buildCodexArgs(
-  request: Pick<RunnerRequest, "workspacePath" | "prompt" | "threadId">,
-  sandboxMode: AppConfig["codexSandboxMode"],
+  request: Pick<
+    RunnerRequest,
+    "workspacePath" | "prompt" | "threadId" | "sandboxMode" | "networkAccess"
+  >,
+  configSandboxMode: AppConfig["codexSandboxMode"],
   workspacePath = request.workspacePath,
 ): string[] {
+  const sandboxMode = request.sandboxMode ?? configSandboxMode;
   const args = [
     "exec",
     "--json",
@@ -33,6 +38,15 @@ export function buildCodexArgs(
     "-C",
     workspacePath,
   ];
+  // Set the network flag explicitly (both ways) so it overrides any value that
+  // a config.toml in CODEX_HOME might carry.
+  if (sandboxMode === "workspace-write") {
+    args.push(
+      "-c",
+      "sandbox_workspace_write.network_access=" +
+        (request.networkAccess === true ? "true" : "false"),
+    );
+  }
   if (request.threadId) {
     args.push("resume", request.threadId, request.prompt);
   } else {
@@ -41,7 +55,42 @@ export function buildCodexArgs(
   return args;
 }
 
-export function parseCodexEventLine(line: string, parsed: ParsedEvents): void {
+/**
+ * Normalise a Codex `--json` event into a guardrail-monitorable action, or
+ * `null` when the event is not an agent action the live monitor cares about.
+ */
+export function toRuntimeActionEvents(event: Record<string, unknown>): RuntimeActionEvent[] {
+  const type = event.type;
+  if (type !== "item.started" && type !== "item.completed") return [];
+  if (!event.item || typeof event.item !== "object") return [];
+  const item = event.item as Record<string, unknown>;
+  const phase = type === "item.started" ? "started" : "completed";
+
+  if (item.type === "command_execution" && typeof item.command === "string") {
+    return [{ kind: "command", value: item.command, phase }];
+  }
+  if (item.type === "file_change" && Array.isArray(item.changes)) {
+    return (item.changes as Array<Record<string, unknown>>)
+      .filter((change) => typeof change.path === "string")
+      .map((change) => ({
+        kind: "file_change" as const,
+        value: change.path as string,
+        phase,
+      }));
+  }
+  if (item.type === "mcp_tool_call") {
+    const server = typeof item.server === "string" ? item.server : "";
+    const tool = typeof item.tool === "string" ? item.tool : "";
+    return [{ kind: "mcp_tool_call", value: [server, tool].filter(Boolean).join("/"), phase }];
+  }
+  return [];
+}
+
+export function parseCodexEventLine(
+  line: string,
+  parsed: ParsedEvents,
+  onAction?: (event: RuntimeActionEvent) => void,
+): void {
   let event: Record<string, unknown>;
   try {
     event = JSON.parse(line) as Record<string, unknown>;
@@ -58,6 +107,10 @@ export function parseCodexEventLine(line: string, parsed: ParsedEvents): void {
     if (item.type === "agent_message" && typeof item.text === "string") {
       parsed.messages.push(item.text);
     }
+  }
+
+  if (onAction) {
+    for (const action of toRuntimeActionEvents(event)) onAction(action);
   }
 
   if (event.type === "turn.completed" && event.usage && typeof event.usage === "object") {
@@ -94,6 +147,7 @@ export class CodexRunner implements AgentRunner {
       cancelled: boolean;
       timedOut: boolean;
       outputExceeded: boolean;
+      guardrailBlock: string | null;
       settled: Promise<void>;
       forceKillTimer: NodeJS.Timeout | null;
     }
@@ -144,10 +198,18 @@ export class CodexRunner implements AgentRunner {
       cancelled: false,
       timedOut: false,
       outputExceeded: false,
+      guardrailBlock: null as string | null,
       settled,
       forceKillTimer: null as NodeJS.Timeout | null,
     };
     this.active.set(request.agentId, active);
+
+    const onAction = (event: Parameters<NonNullable<RunnerRequest["onAction"]>>[0]) => {
+      if (active.guardrailBlock || !request.onAction) return;
+      if (request.onAction(event).allow) return;
+      active.guardrailBlock = event.kind + ": " + event.value;
+      this.terminate(active);
+    };
 
     const parsed: ParsedEvents = {
       messages: [],
@@ -171,7 +233,7 @@ export class CodexRunner implements AgentRunner {
         const lines = stdout.split(/\r?\n/);
         stdout = lines.pop() ?? "";
         for (const line of lines) {
-          parseCodexEventLine(line, parsed);
+          parseCodexEventLine(line, parsed, onAction);
         }
       } else {
         stderr += chunk.toString("utf8");
@@ -196,10 +258,15 @@ export class CodexRunner implements AgentRunner {
         child.once("close", (code) => resolve(code ?? 1));
       });
       if (stdout.trim()) {
-        parseCodexEventLine(stdout.trim(), parsed);
+        parseCodexEventLine(stdout.trim(), parsed, onAction);
       }
       if (active.cancelled) {
         throw new RunCancelledError();
+      }
+      if (active.guardrailBlock) {
+        throw new GuardrailError(
+          "Run blocked by a runtime guardrail — " + active.guardrailBlock,
+        );
       }
       if (active.timedOut) {
         throw new Error("Codex timed out after " + this.config.codexTimeoutMs + " ms");

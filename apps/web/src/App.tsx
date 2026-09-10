@@ -5,6 +5,12 @@ import type {
   AgentRun,
   AuditEntry,
   Grant,
+  GuardrailEffect,
+  GuardrailPolicy,
+  GuardrailRule,
+  GuardrailRuleInput,
+  GuardrailRuleKind,
+  GuardrailSandboxMode,
   Message,
   Scope,
   SystemInfo,
@@ -309,6 +315,282 @@ function AccessPanel({
   );
 }
 
+const RULE_KINDS: { value: GuardrailRuleKind; label: string }[] = [
+  { value: "command_pattern", label: "Command" },
+  { value: "path_pattern", label: "File path" },
+  { value: "prompt_pattern", label: "Prompt" },
+  { value: "output_pattern", label: "Output" },
+];
+
+function GuardrailPanel({
+  agent,
+  onClose,
+  onError,
+  onChanged,
+}: {
+  agent: Agent;
+  onClose: () => void;
+  onError: (reason: unknown) => void;
+  onChanged: (policy: GuardrailPolicy) => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [baseline, setBaseline] = useState<GuardrailRule[]>([]);
+  const [mode, setMode] = useState<"enforce" | "monitor" | "off">("enforce");
+  const [ceiling, setCeiling] = useState<GuardrailSandboxMode>("workspace-write");
+  const [sandboxMode, setSandboxMode] = useState<GuardrailSandboxMode>("workspace-write");
+  const [networkAccess, setNetworkAccess] = useState(false);
+  const [rules, setRules] = useState<GuardrailRuleInput[]>([]);
+  const [draft, setDraft] = useState<GuardrailRuleInput>({
+    kind: "command_pattern",
+    pattern: "",
+    effect: "deny",
+    message: "",
+  });
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    void api
+      .guardrail(agent.id)
+      .then((result) => {
+        if (!alive) return;
+        setBaseline(result.baseline);
+        setMode(result.mode);
+        setCeiling(result.sandboxCeiling);
+        setSandboxMode(result.policy.sandboxMode);
+        setNetworkAccess(result.policy.networkAccess);
+        setRules(
+          result.policy.rules.map((rule) => ({
+            kind: rule.kind,
+            pattern: rule.pattern,
+            effect: rule.effect,
+            message: rule.message,
+          })),
+        );
+      })
+      .catch((reason) => onError(reason))
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [agent.id, onError]);
+
+  const ceilingLocked = ceiling === "read-only";
+  const effectiveSandbox = ceilingLocked ? "read-only" : sandboxMode;
+
+  const addRule = () => {
+    if (!draft.pattern.trim()) return;
+    setRules((current) => [...current, { ...draft, pattern: draft.pattern.trim() }]);
+    setDraft({ kind: draft.kind, pattern: "", effect: draft.effect, message: "" });
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const { policy } = await api.setGuardrail(agent.id, {
+        sandboxMode: effectiveSandbox,
+        networkAccess: effectiveSandbox === "workspace-write" ? networkAccess : false,
+        rules,
+      });
+      onChanged(policy);
+      onClose();
+    } catch (reason) {
+      onError(reason);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-panel">
+      <div className="settings-title">
+        <div>
+          <span className="eyebrow">Runtime guardrails</span>
+          <h2>What {agent.name} may do at runtime</h2>
+        </div>
+        <button type="button" onClick={onClose}>×</button>
+      </div>
+
+      <p className="panel-hint">
+        Evaluated server-side while the Agent runs: the prompt before Codex
+        starts, the sandbox handed to Codex, every command and file change as it
+        happens, and the final output. Every non-clean decision is written to the
+        audit log.
+      </p>
+
+      {mode !== "enforce" && (
+        <p className="panel-hint guardrail-mode-warn">
+          Guardrails are in <strong>{mode}</strong> mode — matches are recorded
+          but {mode === "off" ? "not evaluated" : "not blocked"}. Set
+          <code> GUARDRAIL_MODE=enforce</code> to enforce.
+        </p>
+      )}
+
+      {loading ? (
+        <div className="grant-empty"><Spinner /> Loading policy…</div>
+      ) : (
+        <>
+          <div className="grant-form-row">
+            <label>
+              Sandbox
+              <select
+                value={effectiveSandbox}
+                disabled={ceilingLocked}
+                onChange={(event) =>
+                  setSandboxMode(event.target.value as GuardrailSandboxMode)
+                }
+              >
+                <option value="read-only">read-only</option>
+                <option value="workspace-write">workspace-write</option>
+              </select>
+            </label>
+            <label className="scope-option">
+              <input
+                type="checkbox"
+                checked={effectiveSandbox === "workspace-write" && networkAccess}
+                disabled={effectiveSandbox !== "workspace-write"}
+                onChange={(event) => setNetworkAccess(event.target.checked)}
+              />
+              Allow network access
+            </label>
+          </div>
+          {ceilingLocked && (
+            <p className="panel-note">
+              The platform sandbox ceiling is <code>read-only</code>; this Agent
+              cannot be granted write access.
+            </p>
+          )}
+
+          <h3 className="guardrail-subhead">Rules</h3>
+          <div className="grant-list">
+            {rules.length === 0 && (
+              <div className="grant-empty">
+                No custom rules. The platform baseline below still applies.
+              </div>
+            )}
+            {rules.map((rule, index) => (
+              <div className={"grant-row guardrail-rule-" + rule.effect} key={index}>
+                <span className="scope-chip">
+                  {RULE_KINDS.find((k) => k.value === rule.kind)?.label ?? rule.kind}
+                </span>
+                <code className="guardrail-pattern">{rule.pattern}</code>
+                <span className={"grant-state grant-state-" + rule.effect}>
+                  {rule.effect}
+                </span>
+                <button
+                  className="button button-danger"
+                  disabled={busy}
+                  onClick={() =>
+                    setRules((current) => current.filter((_, i) => i !== index))
+                  }
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="grant-form-row">
+            <label>
+              Match
+              <select
+                value={draft.kind}
+                onChange={(event) =>
+                  setDraft((d) => ({
+                    ...d,
+                    kind: event.target.value as GuardrailRuleKind,
+                  }))
+                }
+              >
+                {RULE_KINDS.map((kind) => (
+                  <option key={kind.value} value={kind.value}>
+                    {kind.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Effect
+              <select
+                value={draft.effect}
+                onChange={(event) =>
+                  setDraft((d) => ({
+                    ...d,
+                    effect: event.target.value as GuardrailEffect,
+                  }))
+                }
+              >
+                <option value="deny">deny</option>
+                <option value="flag">flag</option>
+              </select>
+            </label>
+          </div>
+          <div className="grant-form-row">
+            <label className="guardrail-grow">
+              Pattern (regular expression)
+              <input
+                value={draft.pattern}
+                placeholder="e.g. \\bgit\\s+push\\b"
+                onChange={(event) =>
+                  setDraft((d) => ({ ...d, pattern: event.target.value }))
+                }
+              />
+            </label>
+            <label className="guardrail-grow">
+              Reason (shown in the audit log)
+              <input
+                value={draft.message}
+                placeholder="Why this is blocked"
+                onChange={(event) =>
+                  setDraft((d) => ({ ...d, message: event.target.value }))
+                }
+              />
+            </label>
+          </div>
+          <div className="panel-footer">
+            <button
+              type="button"
+              className="button button-ghost"
+              disabled={busy || !draft.pattern.trim()}
+              onClick={addRule}
+            >
+              Add rule
+            </button>
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={busy}
+              onClick={save}
+            >
+              {busy ? <Spinner /> : "Save policy"}
+            </button>
+          </div>
+
+          <details className="guardrail-baseline">
+            <summary>Platform baseline — {baseline.length} always-on rules</summary>
+            <div className="grant-list">
+              {baseline.map((rule) => (
+                <div className="grant-row" key={rule.id}>
+                  <span className="scope-chip">
+                    {RULE_KINDS.find((k) => k.value === rule.kind)?.label ?? rule.kind}
+                  </span>
+                  <span className="guardrail-baseline-msg">{rule.message}</span>
+                  <span className={"grant-state grant-state-" + rule.effect}>
+                    {rule.effect}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </>
+      )}
+    </section>
+  );
+}
+
 function AuditPanel({
   agent,
   users,
@@ -432,6 +714,7 @@ export default function App() {
   const [showCreate, setShowCreate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showAccess, setShowAccess] = useState(false);
+  const [showGuardrail, setShowGuardrail] = useState(false);
   const [showAudit, setShowAudit] = useState(false);
   const [auditReloadKey, setAuditReloadKey] = useState(0);
   const [form, setForm] = useState(emptyForm);
@@ -523,6 +806,7 @@ export default function App() {
     setActiveRun(null);
     setShowSettings(false);
     setShowAccess(false);
+    setShowGuardrail(false);
     setShowAudit(false);
     setDenied(null);
     setRestrictedView(false);
@@ -937,6 +1221,7 @@ export default function App() {
                     setShowAudit((value) => !value);
                     setShowSettings(false);
                     setShowAccess(false);
+                    setShowGuardrail(false);
                   }}
                 >
                   Audit
@@ -948,9 +1233,24 @@ export default function App() {
                       setShowAccess((value) => !value);
                       setShowSettings(false);
                       setShowAudit(false);
+                      setShowGuardrail(false);
                     }}
                   >
                     Access
+                  </button>
+                )}
+                {isOwner && (
+                  <button
+                    className="button button-ghost"
+                    onClick={() => {
+                      setShowGuardrail((value) => !value);
+                      setShowSettings(false);
+                      setShowAudit(false);
+                      setShowAccess(false);
+                    }}
+                    disabled={busy || selected.status === "busy"}
+                  >
+                    Guardrails
                   </button>
                 )}
                 <button
@@ -959,6 +1259,7 @@ export default function App() {
                     setShowSettings((value) => !value);
                     setShowAccess(false);
                     setShowAudit(false);
+                    setShowGuardrail(false);
                   }}
                   disabled={busy || selected.status === "busy"}
                 >
@@ -989,6 +1290,24 @@ export default function App() {
                 onClose={() => setShowAccess(false)}
                 onError={report}
                 onChanged={() => setAuditReloadKey((value) => value + 1)}
+              />
+            )}
+
+            {showGuardrail && isOwner && (
+              <GuardrailPanel
+                agent={selected}
+                onClose={() => setShowGuardrail(false)}
+                onError={report}
+                onChanged={(policy) => {
+                  setAgents((current) =>
+                    current.map((item) =>
+                      item.id === selected.id
+                        ? { ...item, guardrailPolicy: policy }
+                        : item,
+                    ),
+                  );
+                  setAuditReloadKey((value) => value + 1);
+                }}
               />
             )}
 
@@ -1116,6 +1435,12 @@ export default function App() {
                 {activeRun?.status === "failed" && (
                   <article className="run-error">
                     <strong>Run failed</strong>
+                    <span>{activeRun.error}</span>
+                  </article>
+                )}
+                {activeRun?.status === "blocked" && (
+                  <article className="run-error run-blocked">
+                    <strong>Run blocked by a guardrail</strong>
                     <span>{activeRun.error}</span>
                   </article>
                 )}

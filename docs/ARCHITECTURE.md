@@ -88,6 +88,15 @@ access control, enforced server-side with an audit trail of every decision.
 Full contract, data model, and route→action map:
 [POLICY_ENFORCEMENT.md](POLICY_ENFORCEMENT.md).
 
+It also adds **runtime guardrails** over Agent behavior — a `GuardrailEngine`
+consulted inside `AgentService.executeRun`: the prompt before Codex starts, the
+Codex sandbox mode + network flag, every command / file change / tool call
+while the run executes (kill on deny), and the final output. An always-on
+platform baseline sits under each Agent's own rules; every non-clean decision is
+audited. Full contract: [RUNTIME_GUARDRAILS.md](RUNTIME_GUARDRAILS.md). The path
+from here to a multi-tenant SaaS is
+[ADR 0001](adr/0001-enterprise-saas-target-architecture.md).
+
 ```mermaid
 flowchart TB
     subgraph Experience["Experience Layer (apps/web)"]
@@ -122,6 +131,7 @@ flowchart TB
 | Identity | `apps/server/src/app.ts` onRequest hook, `seed.ts` | `X-User-Id` → seeded principal; unknown/missing → 401 |
 | Policy | `apps/server/src/policy.ts` | `hasScope(user, agentId, action)`; owner-only `delete`/`grant`/`revoke`; live-grant lookup |
 | Enforcement | `apps/server/src/enforcement.ts` | route→action `RULES`, `enforce()` at both checkpoints |
+| Runtime guardrails | `apps/server/src/guardrail/` | `GuardrailEngine`: prompt / sandbox / live action / output, baseline + per-Agent rules |
 | Audit | `apps/server/src/audit-log/` | append + query store, redaction, `GET /api/audit` |
 | Experience | `apps/web/src/App.tsx` | principal switcher, grant/revoke UI, audit view, allow/deny feedback |
 

@@ -11,6 +11,7 @@ import type { AuditStore } from "./audit-log/types.js";
 import type { AppConfig } from "./config.js";
 import { enforce, matchRule } from "./enforcement.js";
 import { HttpError } from "./errors.js";
+import { baselineRules } from "./guardrail/engine.js";
 import type { PolicyService } from "./policy.js";
 import type { User } from "./types.js";
 
@@ -49,6 +50,26 @@ const createGrantBody = z.object({
     .array(z.enum(["invoke", "view_config", "edit_config", "view_runs"]))
     .min(1),
   expiresAt: z.string().datetime().optional(),
+});
+
+const guardrailPolicyBody = z.object({
+  sandboxMode: z.enum(["read-only", "workspace-write"]),
+  networkAccess: z.boolean(),
+  rules: z
+    .array(
+      z.object({
+        kind: z.enum([
+          "prompt_pattern",
+          "command_pattern",
+          "path_pattern",
+          "output_pattern",
+        ]),
+        pattern: z.string().trim().min(1).max(512),
+        effect: z.enum(["deny", "flag"]),
+        message: z.string().trim().max(200),
+      }),
+    )
+    .max(100),
 });
 
 // `/api/users` is the mock principal roster the switcher needs before a
@@ -253,6 +274,41 @@ export async function createApp(
   app.get("/api/runs/:id", async (request) => {
     const { id } = runIdParams.parse(request.params);
     return { run: service.getRun(id) };
+  });
+
+  // Runtime guardrail policy. The always-on platform baseline is returned
+  // alongside so the UI can show what applies even with an empty policy.
+  app.get("/api/agents/:id/guardrail", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    return {
+      policy: service.getGuardrailPolicy(id),
+      baseline: baselineRules(),
+      mode: service.guardrail.mode,
+      sandboxCeiling: service.guardrail.sandboxCeiling,
+    };
+  });
+
+  app.put("/api/agents/:id/guardrail", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    const body = guardrailPolicyBody.parse(request.body);
+    const actor = request.actor!;
+    const before = service.getGuardrailPolicy(id);
+    const policy = await service.setGuardrailPolicy(id, body);
+    await auditLogger.record({
+      actor: { id: actor.id, type: "human" },
+      action: "policy.guardrail_update",
+      target: { type: "agent", id },
+      decision: "allow",
+      payload: {
+        checkpoint: "request",
+        sandboxMode: policy.sandboxMode,
+        networkAccess: policy.networkAccess,
+        ruleCount: policy.rules.length,
+        previousRuleCount: before.rules.length,
+        previousSandboxMode: before.sandboxMode,
+      },
+    });
+    return { policy };
   });
 
   // Grant management (owner-only, enforced by the "grant"/"revoke" Actions).

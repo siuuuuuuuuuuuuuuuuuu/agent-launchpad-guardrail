@@ -39,6 +39,9 @@ export const RULES: readonly EnforcementRule[] = [
   { method: "GET", url: "/api/agents/:id/messages", action: "view_runs", agentIdFrom: "params.id" },
   { method: "GET", url: "/api/agents/:id/runs", action: "view_runs", agentIdFrom: "params.id" },
   { method: "GET", url: "/api/runs/:id", action: "view_runs", agentIdFrom: "run.id" },
+  // Runtime guardrail policy: reading it is config, changing it is config.
+  { method: "GET", url: "/api/agents/:id/guardrail", action: "view_config", agentIdFrom: "params.id" },
+  { method: "PUT", url: "/api/agents/:id/guardrail", action: "edit_config", agentIdFrom: "params.id" },
   // Listing grants is a read; handlerAudits keeps a successful list out of the
   // log (a denied attempt to list still records) so it can't be mistaken for
   // an actual grant being issued.

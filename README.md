@@ -16,8 +16,8 @@ real actions — so a multi-user platform needs to know who may do what to which
 Agent, who actually did it, and how to cut access off.
 
 **What this fork adds:** **per-Agent delegated, revocable, scoped access
-control**, enforced at the backend and Runtime boundary (not the UI), with a
-full audit trail of every decision.
+control** plus **runtime guardrails on Agent behavior**, enforced at the backend
+and Runtime boundary (not the UI), with a full audit trail of every decision.
 
 - Every Agent has an owner. Owners issue **scoped, time-bound, revocable**
   grants (`invoke`, `view_config`, `edit_config`, `view_runs`).
@@ -25,23 +25,32 @@ full audit trail of every decision.
   Fastify boundary **and again** at the `AgentRunner` boundary before Codex runs.
 - Every decision — grant, allow, deny, revoke — is written to a queryable audit
   log. Revocation takes effect on the caller's next request.
+- **Runtime guardrails** then govern what the Agent may *do*: the prompt is
+  screened before Codex starts, the Codex sandbox mode + network flag are set
+  per Agent, every command / file change / tool call is evaluated live (and the
+  run is killed on a deny), and the final output is screened for secrets. An
+  always-on platform baseline applies under each Agent's own rules; every
+  non-clean decision is audited.
 
 | What | Where |
 | --- | --- |
-| Contract, data model, route→action map | [docs/POLICY_ENFORCEMENT.md](docs/POLICY_ENFORCEMENT.md) |
+| Authorization: contract, data model, route→action map | [docs/POLICY_ENFORCEMENT.md](docs/POLICY_ENFORCEMENT.md) |
+| Runtime guardrails: contract, hook points, policy shape | [docs/RUNTIME_GUARDRAILS.md](docs/RUNTIME_GUARDRAILS.md) |
 | Layered architecture diagram | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#guardrail-bouncer-track) |
+| Enterprise SaaS target architecture | [docs/adr/0001-enterprise-saas-target-architecture.md](docs/adr/0001-enterprise-saas-target-architecture.md) |
 | 3-minute demo script | [docs/DEMO.md](docs/DEMO.md) |
 | Scripted end-to-end walkthrough | `./scripts/guardrail-demo.sh` |
 
-Enforcement: `apps/server/src/enforcement.ts` · Policy: `apps/server/src/policy.ts` ·
+Authorization: `apps/server/src/enforcement.ts` · `apps/server/src/policy.ts` ·
+Runtime guardrails: `apps/server/src/guardrail/` ·
 Audit: `apps/server/src/audit-log/` · UI: `apps/web/src/App.tsx`
 
 > [!WARNING]
 > Hackathon proof of concept. Identity is a **mock** (`X-User-Id` header +
-> seeded users) — authorization and audit are real and enforced server-side,
-> but there is no production auth, no tenant isolation, and no hardened
-> sandbox. Do not use production data or credentials. See
-> [SECURITY.md](SECURITY.md).
+> seeded users) — authorization, runtime guardrails, and audit are real and
+> enforced server-side, but there is no production auth, no tenant isolation,
+> and the sandbox is Codex's own plus an ordinary container. Do not use
+> production data or credentials. See [SECURITY.md](SECURITY.md).
 
 ## Screenshots
 
@@ -244,7 +253,8 @@ cp deploy/volcengine/terraform.tfvars.example \
 | `ARK_BASE_URL` | Beijing v3 endpoint | Ark OpenAI-compatible API URL. |
 | `APP_AUTH_TOKEN` | Empty on loopback | Shared demo token; use 24+ random characters remotely. |
 | `RUNTIME_PROVIDER` | `local-process` | `container` for disposable local Runtime containers. |
-| `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode. |
+| `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode; also the per-Agent guardrail sandbox ceiling. |
+| `GUARDRAIL_MODE` | `enforce` | Runtime guardrails: `enforce`, `monitor`, or `off`. |
 | `CODEX_TIMEOUT_MS` | `600000` | Maximum duration of one turn. |
 | `LOCAL_POC_DATA_ROOT` | Platform-specific | Local metadata, workspace, and session directory. |
 
@@ -287,6 +297,8 @@ Guardrail scenario, end to end (server must be running):
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Policy enforcement — contract & wiring](docs/POLICY_ENFORCEMENT.md)
+- [Runtime guardrails — contract & wiring](docs/RUNTIME_GUARDRAILS.md)
+- [Architecture decision records](docs/adr/)
 - [Demo script](docs/DEMO.md)
 - [Local POC](docs/LOCAL_POC.md)
 - [Deployment](docs/DEPLOYMENT.md)
