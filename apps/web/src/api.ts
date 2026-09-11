@@ -53,7 +53,15 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  auth: () => request<{ required: boolean }>("/api/auth"),
+  auth: () => request<{ required: boolean; mode: "local" | "oidc" }>("/api/auth"),
+  // AUTH_MODE=oidc only: exchange the one-time code from the /api/auth/callback
+  // redirect for the app's session token, and best-effort logout.
+  exchange: (code: string) =>
+    request<{ token: string }>("/api/auth/exchange", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   system: () => request<SystemInfo>("/api/system"),
   listAgents: () => request<{ agents: Agent[] }>("/api/agents"),
   createAgent: (body: {

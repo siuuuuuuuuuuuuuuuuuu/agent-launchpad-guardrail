@@ -11,10 +11,16 @@ credentials, personal data, or exploit details in an issue.
 
 ## Known limitations
 
-- Identity is a **mock**: a trusted `X-User-Id` header resolved against a seeded
-  user table (`apps/server/src/seed.ts`). No OAuth/SSO, no passwords, no session
-  management. Anything that can set request headers can assume any principal —
-  the shared `APP_AUTH_TOKEN` is the only barrier to that.
+- Identity **defaults** to a mock (`AUTH_MODE=local`, the same as before): a
+  trusted `X-User-Id` header resolved against a seeded user table
+  (`apps/server/src/seed.ts`). Anything that can set request headers can
+  assume any principal — the shared `APP_AUTH_TOKEN` is the only barrier to
+  that. `AUTH_MODE=oidc` replaces it with real, provider-verified sessions
+  (Authorization Code + PKCE, signature/issuer/audience-checked `id_token`,
+  the app's own short-lived signed session token — no long-lived credential
+  reaches the browser). See [docs/IDENTITY.md](docs/IDENTITY.md), including
+  its own known limitations (no refresh tokens; logout is client-side only;
+  role comes from a static admin-email allowlist, not real group sync).
 - Authorization **is** enforced server-side (per-Agent delegated, scoped,
   revocable grants; checked at the Fastify and `AgentRunner` boundaries; every
   decision audited). See [docs/POLICY_ENFORCEMENT.md](docs/POLICY_ENFORCEMENT.md).

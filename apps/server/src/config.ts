@@ -48,9 +48,34 @@ const envSchema = z.object({
     .url()
     .default("https://ark.cn-beijing.volces.com/api/v3"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
+  // Identity. "local" is the mock X-User-Id + seeded-user path (unchanged
+  // default). "oidc" verifies real sessions against a standards-compliant
+  // identity provider (WorkOS, Okta, Entra, Auth0, Keycloak, ...) via
+  // Authorization Code + PKCE and OIDC discovery — see docs/IDENTITY.md.
+  AUTH_MODE: z.enum(["local", "oidc"]).default("local"),
+  OIDC_ISSUER: z.string().url().optional(),
+  OIDC_CLIENT_ID: z.string().trim().min(1).optional(),
+  OIDC_CLIENT_SECRET: z.string().trim().min(1).optional(),
+  OIDC_REDIRECT_URI: z.string().url().optional(),
+  OIDC_SCOPES: z.string().trim().min(1).default("openid profile email"),
+  // Comma-separated allowlist: a verified email in this list is provisioned
+  // owner-capable. Everyone else provisions standard. Placeholder for real
+  // role/group sync (SCIM) — see docs/IDENTITY.md limitations.
+  OIDC_ADMIN_EMAILS: z.string().trim().optional(),
+  // Signs the app's own short-lived session token minted after the OIDC
+  // callback. Required (24+ chars) whenever AUTH_MODE=oidc.
+  SESSION_SECRET: z.string().trim().optional(),
+  SESSION_TTL_MS: z.coerce.number().int().min(60_000).default(12 * 60 * 60 * 1000),
+  // Where the browser lands after a successful login. Defaults to same-origin
+  // ("/"), which is correct for the production single-origin deployment;
+  // override for `npm run dev` where the web app is on a different port.
+  WEB_ORIGIN: z.string().url().optional(),
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
+/** Non-null only when `authMode === "oidc"`. */
+export type OidcConfig = NonNullable<AppConfig["oidc"]>;
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
   const env = envSchema.parse(environment);
@@ -61,6 +86,24 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
       throw new Error(
         "APP_AUTH_TOKEN must contain at least 24 characters for a non-loopback production server",
       );
+    }
+  }
+  if (env.AUTH_MODE === "oidc") {
+    const missing = (
+      [
+        ["OIDC_ISSUER", env.OIDC_ISSUER],
+        ["OIDC_CLIENT_ID", env.OIDC_CLIENT_ID],
+        ["OIDC_CLIENT_SECRET", env.OIDC_CLIENT_SECRET],
+        ["OIDC_REDIRECT_URI", env.OIDC_REDIRECT_URI],
+      ] as const
+    )
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missing.length > 0) {
+      throw new Error("AUTH_MODE=oidc requires " + missing.join(", "));
+    }
+    if (!env.SESSION_SECRET || env.SESSION_SECRET.length < 24) {
+      throw new Error("AUTH_MODE=oidc requires SESSION_SECRET of at least 24 characters");
     }
   }
   const defaultContainerUser =
@@ -92,6 +135,26 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     arkModel: env.ARK_MODEL?.trim() ?? "",
     arkBaseUrl: env.ARK_BASE_URL.replace(/\/+$/, ""),
     nodeEnv: env.NODE_ENV,
+    authMode: env.AUTH_MODE,
+    oidc:
+      env.AUTH_MODE === "oidc"
+        ? {
+            issuer: env.OIDC_ISSUER!.replace(/\/+$/, ""),
+            clientId: env.OIDC_CLIENT_ID!,
+            clientSecret: env.OIDC_CLIENT_SECRET!,
+            redirectUri: env.OIDC_REDIRECT_URI!,
+            scopes: env.OIDC_SCOPES,
+            adminEmails: new Set(
+              (env.OIDC_ADMIN_EMAILS ?? "")
+                .split(",")
+                .map((email) => email.trim().toLowerCase())
+                .filter(Boolean),
+            ),
+            sessionSecret: env.SESSION_SECRET!,
+            sessionTtlMs: env.SESSION_TTL_MS,
+          }
+        : null,
+    webOrigin: env.WEB_ORIGIN?.replace(/\/+$/, "") ?? "",
   };
 }
 

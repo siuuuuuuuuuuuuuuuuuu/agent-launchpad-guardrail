@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { HttpError } from "./errors.js";
+import type { OidcClaims } from "./identity/types.js";
 import type { JsonStore } from "./store.js";
 import type { Grant, Scope, User } from "./types.js";
 
@@ -59,6 +60,39 @@ export class PolicyService {
 
   listUsers(): User[] {
     return this.store.snapshot().users;
+  }
+
+  /**
+   * Just-in-time provisioning for AUTH_MODE=oidc: find-or-create the local
+   * User for a verified principal. Existing users are refreshed (name/email
+   * may change at the IdP) but never re-role themselves — an admin promotion
+   * via `adminEmails` takes effect once, at first login, deliberately: an
+   * owner later dropped from the allowlist keeps ownership of Agents they
+   * already own rather than being silently demoted mid-session. Real
+   * role/group sync (SCIM) is a separate increment — see docs/IDENTITY.md.
+   */
+  async provisionOidcUser(
+    claims: OidcClaims,
+    adminEmails: ReadonlySet<string>,
+  ): Promise<User> {
+    return this.store.mutate((database) => {
+      const existing = database.users.find((user) => user.idpSubject === claims.sub);
+      if (existing) {
+        if (claims.name) existing.name = claims.name;
+        if (claims.email) existing.email = claims.email;
+        return structuredClone(existing);
+      }
+      const email = claims.email?.toLowerCase();
+      const user: User = {
+        id: "user_" + randomUUID(),
+        name: claims.name ?? claims.email ?? claims.sub,
+        role: email && adminEmails.has(email) ? "owner-capable" : "standard",
+        idpSubject: claims.sub,
+        ...(claims.email ? { email: claims.email } : {}),
+      };
+      database.users.push(user);
+      return structuredClone(user);
+    });
   }
 
   /**

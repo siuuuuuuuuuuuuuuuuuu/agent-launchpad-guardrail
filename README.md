@@ -34,6 +34,7 @@ and Runtime boundary (not the UI), with a full audit trail of every decision.
 
 | What | Where |
 | --- | --- |
+| Identity: real OIDC login, or the mock, contract & wiring | [docs/IDENTITY.md](docs/IDENTITY.md) |
 | Authorization: contract, data model, route→action map | [docs/POLICY_ENFORCEMENT.md](docs/POLICY_ENFORCEMENT.md) |
 | Runtime guardrails: contract, hook points, policy shape | [docs/RUNTIME_GUARDRAILS.md](docs/RUNTIME_GUARDRAILS.md) |
 | Layered architecture diagram | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#guardrail-bouncer-track) |
@@ -41,16 +42,19 @@ and Runtime boundary (not the UI), with a full audit trail of every decision.
 | 3-minute demo script | [docs/DEMO.md](docs/DEMO.md) |
 | Scripted end-to-end walkthrough | `./scripts/guardrail-demo.sh` |
 
-Authorization: `apps/server/src/enforcement.ts` · `apps/server/src/policy.ts` ·
+Identity: `apps/server/src/identity/` · Authorization:
+`apps/server/src/enforcement.ts` · `apps/server/src/policy.ts` ·
 Runtime guardrails: `apps/server/src/guardrail/` ·
 Audit: `apps/server/src/audit-log/` · UI: `apps/web/src/App.tsx`
 
 > [!WARNING]
-> Hackathon proof of concept. Identity is a **mock** (`X-User-Id` header +
-> seeded users) — authorization, runtime guardrails, and audit are real and
-> enforced server-side, but there is no production auth, no tenant isolation,
-> and the sandbox is Codex's own plus an ordinary container. Do not use
-> production data or credentials. See [SECURITY.md](SECURITY.md).
+> Hackathon proof of concept. **Identity defaults to a mock** (`X-User-Id`
+> header + seeded users, `AUTH_MODE=local`) — set `AUTH_MODE=oidc` for real,
+> verified sessions against a standards-compliant identity provider (see
+> [docs/IDENTITY.md](docs/IDENTITY.md)). Authorization, runtime guardrails, and
+> audit are real and enforced server-side either way, but there is still no
+> tenant isolation and the sandbox is Codex's own plus an ordinary container.
+> Do not use production data or credentials. See [SECURITY.md](SECURITY.md).
 
 ## Screenshots
 
@@ -255,6 +259,7 @@ cp deploy/volcengine/terraform.tfvars.example \
 | `RUNTIME_PROVIDER` | `local-process` | `container` for disposable local Runtime containers. |
 | `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode; also the per-Agent guardrail sandbox ceiling. |
 | `GUARDRAIL_MODE` | `enforce` | Runtime guardrails: `enforce`, `monitor`, or `off`. |
+| `AUTH_MODE` | `local` | `oidc` for real identity — see [docs/IDENTITY.md](docs/IDENTITY.md) for the full `OIDC_*`/`SESSION_*` set it requires. |
 | `CODEX_TIMEOUT_MS` | `600000` | Maximum duration of one turn. |
 | `LOCAL_POC_DATA_ROOT` | Platform-specific | Local metadata, workspace, and session directory. |
 
@@ -296,6 +301,7 @@ Guardrail scenario, end to end (server must be running):
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Identity — contract & wiring](docs/IDENTITY.md)
 - [Policy enforcement — contract & wiring](docs/POLICY_ENFORCEMENT.md)
 - [Runtime guardrails — contract & wiring](docs/RUNTIME_GUARDRAILS.md)
 - [Architecture decision records](docs/adr/)
