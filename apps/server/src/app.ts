@@ -12,6 +12,8 @@ import type { AppConfig } from "./config.js";
 import { enforce, matchRule } from "./enforcement.js";
 import { HttpError } from "./errors.js";
 import { baselineRules } from "./guardrail/engine.js";
+import { registerIdentityRoutes } from "./identity/routes.js";
+import { verifySessionToken } from "./identity/session.js";
 import type { PolicyService } from "./policy.js";
 import type { User } from "./types.js";
 
@@ -72,9 +74,30 @@ const guardrailPolicyBody = z.object({
     .max(100),
 });
 
-// `/api/users` is the mock principal roster the switcher needs before a
-// principal is chosen — no secrets, safe to expose past the identity gate.
-const PUBLIC_PATHS = new Set(["/api/health", "/api/auth", "/api/users"]);
+// `/api/users` is the mock principal roster the local-mode switcher needs
+// before a principal is chosen — no secrets, safe to expose past the identity
+// gate. In oidc mode it would list real people's names/emails, so it moves
+// behind the identity gate instead (see buildPublicPaths).
+const ALWAYS_PUBLIC_PATHS = new Set(["/api/health", "/api/auth"]);
+// The whole OIDC dance is necessarily pre-authentication.
+const OIDC_AUTH_PATHS = new Set([
+  "/api/auth/login",
+  "/api/auth/callback",
+  "/api/auth/exchange",
+  "/api/auth/logout",
+]);
+
+function buildPublicPaths(config: AppConfig): Set<string> {
+  const paths = new Set(ALWAYS_PUBLIC_PATHS);
+  if (config.authMode === "local") {
+    paths.add("/api/users");
+  }
+  // Always exempt from the identity gate, in every mode: in local mode the
+  // handlers 404 themselves (requireOidc), a clean "this isn't available
+  // here" rather than a confusing 401 "who are you" on a pre-auth endpoint.
+  for (const path of OIDC_AUTH_PATHS) paths.add(path);
+  return paths;
+}
 
 export async function createApp(
   config: AppConfig,
@@ -100,6 +123,7 @@ export async function createApp(
 
   const auditLogger = new AuditLogger(auditStore);
   app.decorate("auditLogger", auditLogger);
+  const publicPaths = buildPublicPaths(config);
 
   // GET /api/audit — read API for the audit-log view. Inherits the same
   // bearer-token + principal gate as every other /api/* route via the
@@ -128,9 +152,13 @@ export async function createApp(
     }),
   );
 
-  // Coarse gate: shared operator token (unchanged from the Starter Kit).
+  // Coarse gate: shared operator token. Only meaningful in local mode — in
+  // oidc mode the Authorization header carries the real session token, which
+  // the identity hook below verifies properly, so this check is skipped
+  // rather than doubled up on the same header.
   app.addHook("onRequest", async (request, reply) => {
     if (
+      config.authMode !== "local" ||
       !config.authToken ||
       !request.url.startsWith("/api/") ||
       request.url === "/api/health" ||
@@ -150,11 +178,26 @@ export async function createApp(
     }
   });
 
-  // Principal resolution: mock identity via the X-User-Id header, checked
-  // against the mock user table. No production auth — intentional per scope.
+  // Principal resolution.
+  //   local: mock identity via the X-User-Id header against the seeded table.
+  //   oidc:  verify the app's own session token (Authorization: Bearer),
+  //          minted at /api/auth/callback after a real OIDC login.
   app.addHook("onRequest", async (request, reply) => {
     const path = request.url.split("?")[0] ?? "";
-    if (!path.startsWith("/api/") || PUBLIC_PATHS.has(path)) {
+    if (!path.startsWith("/api/") || publicPaths.has(path)) {
+      return;
+    }
+    if (config.authMode === "oidc") {
+      const header = request.headers.authorization ?? "";
+      const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+      const claims = token
+        ? await verifySessionToken(config.oidc!.sessionSecret, token)
+        : null;
+      const user = claims ? policy.getUser(claims.sub) : undefined;
+      if (!user) {
+        return reply.code(401).send({ error: "Sign in required" });
+      }
+      request.actor = user;
       return;
     }
     const headerValue = request.headers["x-user-id"];
@@ -198,7 +241,12 @@ export async function createApp(
     service: "volc-agent-launchpad",
   }));
 
-  app.get("/api/auth", async () => ({ required: config.authToken.length > 0 }));
+  app.get("/api/auth", async () => ({
+    required: config.authMode === "oidc" || config.authToken.length > 0,
+    mode: config.authMode,
+  }));
+
+  registerIdentityRoutes(app, config, policy);
 
   app.get("/api/users", async () => ({ users: policy.listUsers() }));
 

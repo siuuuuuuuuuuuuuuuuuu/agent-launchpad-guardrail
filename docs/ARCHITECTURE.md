@@ -128,7 +128,7 @@ flowchart TB
 
 | Layer | Lives in | Owns |
 | --- | --- | --- |
-| Identity | `apps/server/src/app.ts` onRequest hook, `seed.ts` | `X-User-Id` → seeded principal; unknown/missing → 401 |
+| Identity | `apps/server/src/app.ts` onRequest hook, `apps/server/src/identity/` | `AUTH_MODE=local` (default): `X-User-Id` → seeded principal. `AUTH_MODE=oidc`: verified OIDC session → provisioned principal. See [IDENTITY.md](IDENTITY.md). |
 | Policy | `apps/server/src/policy.ts` | `hasScope(user, agentId, action)`; owner-only `delete`/`grant`/`revoke`; live-grant lookup |
 | Enforcement | `apps/server/src/enforcement.ts` | route→action `RULES`, `enforce()` at both checkpoints |
 | Runtime guardrails | `apps/server/src/guardrail/` | `GuardrailEngine`: prompt / sandbox / live action / output, baseline + per-Agent rules |

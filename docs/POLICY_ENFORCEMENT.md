@@ -22,7 +22,12 @@ Every call to `enforce()` writes one audit entry via the audit subsystem's
 `"request"` | `"runtime"`. A request that skips checkpoint 1 (direct
 `AgentService` call, future internal route) is still stopped at checkpoint 2.
 
-## Identity (mock)
+## Identity (mock, or real via `AUTH_MODE=oidc`)
+
+This section describes the default `AUTH_MODE=local` path. A real,
+provider-verified identity path also exists — see
+[IDENTITY.md](IDENTITY.md) — and resolves to the same `PolicyService.getUser`
+seam, so nothing below changes when it's enabled.
 
 - Principal is the `X-User-Id` header, resolved against the seeded user table
   (`apps/server/src/seed.ts`: `user-alice` owner-capable, `user-bob`,
@@ -89,11 +94,13 @@ logs the deny path. Listing grants (`GET`) is a read and is not logged on allow.
 
 ## Handoff notes
 
-- **Identity/Policy owner:** `apps/server/src/policy.ts` internals + `seed.ts`.
-  Keep `hasScope` / `getUser` / `canSee` signatures stable — the enforcement
-  layer depends only on those. `createGrant` validates scopes, `expiresAt`, and
-  that `grantedBy` is the Agent owner; swapping the seeded user table for a real
-  identity provider is the intended next step and touches nothing else.
+- **Identity/Policy owner:** `apps/server/src/policy.ts` internals + `seed.ts`
+  (local mode) / `apps/server/src/identity/` (oidc mode). Keep `hasScope` /
+  `getUser` / `canSee` signatures stable — the enforcement layer depends only
+  on those, which is exactly what let the real identity provider path
+  (`AUTH_MODE=oidc`, [IDENTITY.md](IDENTITY.md)) land without touching
+  enforcement at all. `createGrant` validates scopes, `expiresAt`, and that
+  `grantedBy` is the Agent owner.
 - **Audit** (merged from `main`, owned by `apps/server/src/audit-log/`):
   enforcement calls `AuditLogger.record({ actor, action, target, decision,
   payload })`. `createApp(config, service, auditStore, policy)` builds the

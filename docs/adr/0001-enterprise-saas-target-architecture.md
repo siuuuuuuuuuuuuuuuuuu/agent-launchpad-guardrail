@@ -392,15 +392,27 @@ are the foundation everything else needs.
 
 ### Phase 1 — Identity is real *(start here)*
 
-Replace the `X-User-Id` hook with OIDC token validation; introduce the internal
-`Principal`; stand up `organizations` / `users` / `memberships` as the identity
-tables (even before full tenancy scoping); JIT-provision on first login; keep
-`AUTH_MODE=local` for dev with the seeded users as fixtures; add CSRF
-protection; remove `APP_AUTH_TOKEN` as an auth mechanism. `PolicyService.getUser`
-stays the lookup seam. Provider: WorkOS (SSO first, SCIM in Phase 3).
+**Status: shipped for the single-tenant slice** — `AUTH_MODE=oidc` (default
+stays `local`), real Authorization Code + PKCE against any standard OIDC
+provider, verified `id_token` (issuer/audience/signature via JWKS), JIT
+provisioning through `PolicyService.provisionOidcUser`, the app's own
+short-lived session token. Full contract: [IDENTITY.md](../IDENTITY.md).
 
-**Exit:** no request is trusted without a verified token; every request resolves
-to a `Principal` with an `organizationId`.
+Delta from the plan below, by design: **no cookie**, so **no CSRF
+middleware** — the browser holds the session token as a bearer credential
+exactly like the pre-existing `APP_AUTH_TOKEN`, which a cookie-based session
+would have needed CSRF protection to guard and a bearer token doesn't.
+`APP_AUTH_TOKEN` is disabled as an auth mechanism only in oidc mode (not
+removed outright — `local` mode, and its tests/scripts, are unchanged).
+`Principal` has no `organizationId` yet and there is no `organizations` /
+`memberships` table — that's genuinely Phase 3 (tenancy) work, not pulled
+forward. Provider: any OIDC-compliant one; WorkOS is the reference target,
+untested here since it needs a real tenant (the test suite runs against a
+real, ephemeral, self-signed OIDC provider instead — same protocol, no
+external dependency).
+
+**Exit:** no request is trusted without a verified token; every request
+resolves to a `Principal` (still without an `organizationId` — Phase 3).
 
 ### Phase 2 — Postgres system of record
 

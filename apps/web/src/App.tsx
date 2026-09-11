@@ -32,6 +32,10 @@ const emptyForm = {
 
 const SCOPE_OPTIONS: Scope[] = ["invoke", "view_config", "edit_config", "view_runs"];
 const USER_STORAGE_KEY = "launchpad.currentUser";
+// sessionStorage, not localStorage: the session token is a real bearer
+// credential (AUTH_MODE=oidc) — scope it to the tab, drop it when the tab
+// closes, never let it silently outlive the browser session.
+const SESSION_TOKEN_KEY = "launchpad.sessionToken";
 
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -725,8 +729,10 @@ export default function App() {
   const [denied, setDenied] = useState<string | null>(null);
   const [restrictedView, setRestrictedView] = useState(false);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
+  const [authMode, setAuthMode] = useState<"local" | "oidc">("local");
   const [authInput, setAuthInput] = useState("");
   const [tokenReady, setTokenReady] = useState(false);
+  const [exchangingLogin, setExchangingLogin] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUserState] = useState<User | null>(null);
   const messageEnd = useRef<HTMLDivElement>(null);
@@ -773,10 +779,11 @@ export default function App() {
     mountedRef.current = true;
     void api
       .auth()
-      .then(({ required }) => {
+      .then(({ required, mode }) => {
         if (!mountedRef.current) return;
         setAuthRequired(required);
-        if (!required) setTokenReady(true);
+        setAuthMode(mode);
+        if (mode === "local" && !required) setTokenReady(true);
       })
       .catch((reason) => report(reason));
     return () => {
@@ -784,10 +791,60 @@ export default function App() {
     };
   }, [report]);
 
-  // Once the shared token clears, load the mock principal roster and restore
-  // the previously-selected principal if it is still valid.
+  // AUTH_MODE=oidc: either finish the login (a `?auth=<code>` from the
+  // /api/auth/callback redirect, exchanged for the session token — never
+  // stored in the URL or browser history) or restore one already held for
+  // this tab. No stored token and no code means "not signed in yet".
   useEffect(() => {
-    if (!tokenReady || currentUser) return;
+    if (authMode !== "oidc" || tokenReady) return;
+    const code = new URLSearchParams(window.location.search).get("auth");
+    if (!code) {
+      const stored = sessionStorage.getItem(SESSION_TOKEN_KEY);
+      if (stored) {
+        setAuthToken(stored);
+        setTokenReady(true);
+      }
+      return;
+    }
+    setExchangingLogin(true);
+    void api
+      .exchange(code)
+      .then(({ token }) => {
+        sessionStorage.setItem(SESSION_TOKEN_KEY, token);
+        setAuthToken(token);
+        setTokenReady(true);
+      })
+      .catch((reason) => report(reason))
+      .finally(() => {
+        window.history.replaceState({}, "", window.location.pathname);
+        setExchangingLogin(false);
+      });
+  }, [authMode, tokenReady, report]);
+
+  // AUTH_MODE=oidc: once a session token is in hand, resolve the real
+  // principal and load their Agents — the mock-picker's chooseUser() is
+  // local-mode only.
+  useEffect(() => {
+    if (authMode !== "oidc" || !tokenReady || currentUser) return;
+    void api
+      .me()
+      .then(({ user }) => {
+        if (!mountedRef.current) return;
+        setCurrentUserState(user);
+      })
+      .catch((reason) => report(reason));
+  }, [authMode, tokenReady, currentUser, report]);
+
+  useEffect(() => {
+    if (authMode !== "oidc" || !currentUser) return;
+    void bootstrap().catch((reason) => report(reason));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authMode, currentUser]);
+
+  // local mode only: once the shared token clears, load the mock principal
+  // roster and restore the previously-selected principal if still valid.
+  useEffect(() => {
+    if (authMode !== "local" || !tokenReady || currentUser) return;
     void api
       .users()
       .then(({ users: roster }) => {
@@ -799,7 +856,7 @@ export default function App() {
       })
       .catch((reason) => report(reason));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tokenReady, currentUser, report]);
+  }, [authMode, tokenReady, currentUser, report]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -874,6 +931,20 @@ export default function App() {
   const signOut = () => {
     localStorage.removeItem(USER_STORAGE_KEY);
     setCurrentUser("");
+    setCurrentUserState(null);
+    setAgents([]);
+    setMessages([]);
+    setSelectedId(null);
+  };
+
+  // AUTH_MODE=oidc: the session token is stateless (no server-side revocation
+  // list in this increment — see docs/IDENTITY.md), so signing out is
+  // client-side: drop the token, forget the principal.
+  const signOutSso = () => {
+    void api.logout().catch(() => undefined);
+    sessionStorage.removeItem(SESSION_TOKEN_KEY);
+    setAuthToken("");
+    setTokenReady(false);
     setCurrentUserState(null);
     setAgents([]);
     setMessages([]);
@@ -1037,7 +1108,40 @@ export default function App() {
     );
   }
 
-  if (authRequired && !tokenReady) {
+  if (authMode === "oidc" && !tokenReady) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-card" aria-live="polite">
+          <div className="brand-mark">A</div>
+          <span className="eyebrow">Agent Launchpad</span>
+          <h1>{exchangingLogin ? "Signing you in…" : "Sign in"}</h1>
+          {error && <div className="error-banner" role="alert">{error}</div>}
+          {exchangingLogin ? (
+            <Spinner />
+          ) : (
+            <a className="button button-primary" href="/api/auth/login">
+              Sign in with SSO
+            </a>
+          )}
+        </section>
+      </main>
+    );
+  }
+
+  if (authMode === "oidc" && !currentUser) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-card" aria-live="polite">
+          <div className="brand-mark">A</div>
+          <span className="eyebrow">Agent Launchpad</span>
+          <h1>Loading your account</h1>
+          <Spinner />
+        </section>
+      </main>
+    );
+  }
+
+  if (authMode === "local" && authRequired && !tokenReady) {
     return (
       <main className="auth-screen">
         <form className="auth-card" onSubmit={unlock}>
@@ -1065,7 +1169,7 @@ export default function App() {
     );
   }
 
-  if (!currentUser) {
+  if (authMode === "local" && !currentUser) {
     return (
       <main className="auth-screen">
         <section className="auth-card">
@@ -1096,6 +1200,18 @@ export default function App() {
     );
   }
 
+  // Unreachable in practice — the four gates above cover every
+  // (authMode, currentUser) combination — but narrows the type for TS.
+  if (!currentUser) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-card" aria-live="polite">
+          <Spinner />
+        </section>
+      </main>
+    );
+  }
+
   const isOwner = selected != null && selected.ownerId === currentUser.id;
 
   return (
@@ -1113,7 +1229,9 @@ export default function App() {
           </div>
         </div>
 
-        <UserSwitcher users={users} current={currentUser} onSwitch={switchUser} />
+        {authMode === "local" && (
+          <UserSwitcher users={users} current={currentUser} onSwitch={switchUser} />
+        )}
 
         <button
           className="button button-primary create-button"
@@ -1154,8 +1272,11 @@ export default function App() {
           )}
         </nav>
 
-        <button className="sidebar-signout" onClick={signOut}>
-          Switch principal
+        <button
+          className="sidebar-signout"
+          onClick={authMode === "oidc" ? signOutSso : signOut}
+        >
+          {authMode === "oidc" ? "Sign out (" + currentUser.name + ")" : "Switch principal"}
         </button>
 
         <div className="runtime-card">

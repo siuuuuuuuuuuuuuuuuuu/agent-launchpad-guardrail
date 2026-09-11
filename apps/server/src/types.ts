@@ -73,6 +73,9 @@ export interface User {
   id: string;
   name: string;
   role: UserRole;
+  /** Set only for a user provisioned from a real identity provider (AUTH_MODE=oidc). */
+  email?: string;
+  idpSubject?: string;
 }
 
 export interface Grant {
