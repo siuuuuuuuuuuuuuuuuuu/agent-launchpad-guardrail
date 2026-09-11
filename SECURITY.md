@@ -23,12 +23,17 @@ credentials, personal data, or exploit details in an issue.
   whole log; anyone else must name an Agent they own or hold a grant on, and an
   untargeted query returns only their own actions. This is coarse — a grantee
   can still see other principals' activity on a shared Agent.
+- Runtime guardrails ([docs/RUNTIME_GUARDRAILS.md](docs/RUNTIME_GUARDRAILS.md))
+  screen the prompt, set the per-Agent Codex sandbox, monitor every command /
+  file change / tool call live, and screen the output. Limits: the live monitor
+  is **detect-and-halt**, not pre-execution approval (a denied command may
+  already be running when the run is killed); it depends on Codex's `--json`
+  item schema; and there is no per-host egress allow-list — network is the
+  Codex sandbox flag, default off per Agent.
 - No tenant isolation at the Runtime/container layer.
 - No CSRF protection
 - No per-Agent container boundary in ECS mode
 - Ordinary local containers, not hardened multi-tenant sandboxes
-- Broad outbound network access
-- Prompt-triggered command and file execution
 - Ark key available to the server and active Runtime container
 - Ark key stored in Terraform POC state
 

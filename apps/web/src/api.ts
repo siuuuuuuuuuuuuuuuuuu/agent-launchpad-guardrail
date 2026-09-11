@@ -3,6 +3,10 @@ import type {
   AgentRun,
   AuditPage,
   Grant,
+  GuardrailPolicy,
+  GuardrailPolicyResponse,
+  GuardrailRuleInput,
+  GuardrailSandboxMode,
   Message,
   Scope,
   SystemInfo,
@@ -113,6 +117,22 @@ export const api = {
       "/api/agents/" + agentId + "/grants/" + grantId,
       { method: "DELETE" },
     ),
+
+  // Runtime guardrails
+  guardrail: (agentId: string) =>
+    request<GuardrailPolicyResponse>("/api/agents/" + agentId + "/guardrail"),
+  setGuardrail: (
+    agentId: string,
+    body: {
+      sandboxMode: GuardrailSandboxMode;
+      networkAccess: boolean;
+      rules: GuardrailRuleInput[];
+    },
+  ) =>
+    request<{ policy: GuardrailPolicy }>("/api/agents/" + agentId + "/guardrail", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   // GET /api/audit — filters: actor, action, target, decision, from, to, limit, cursor
   audit: (params: Record<string, string> = {}) =>
     request<AuditPage>(
