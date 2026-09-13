@@ -7,6 +7,7 @@ consequences. Superseding decisions get a new ADR that links back.
 | # | Title | Status |
 | --- | --- | --- |
 | [0001](0001-enterprise-saas-target-architecture.md) | Enterprise multi-tenant SaaS target architecture | Proposed |
+| [0002](0002-kubernetes-deployment-substrate.md) | Kubernetes deployment substrate | Accepted |
 
 ## Status values
 

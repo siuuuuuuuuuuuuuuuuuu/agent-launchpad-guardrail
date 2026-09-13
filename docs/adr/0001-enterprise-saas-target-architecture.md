@@ -508,6 +508,8 @@ automation; quarterly access reviews; SOC 2 gap tracking.
    container platform vs Volcengine-native services. Drives sandbox choice
    (gVisor assumes k8s), Postgres/Redis sourcing, and IaC. *Needs a decision
    before Phase 2 infra work.*
+   **Resolved by [ADR-0002](0002-kubernetes-deployment-substrate.md):**
+   Kubernetes (Volcengine VKE).
 2. **Data residency** — do target customers require region-pinned data / EU
    isolation? If yes, the "dedicated" isolation tier and regional deployments
    move earlier, and Keycloak vs WorkOS is reconsidered.
