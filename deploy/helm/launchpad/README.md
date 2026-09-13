@@ -4,6 +4,12 @@ Deploys the existing Agent Launchpad app onto the VKE cluster provisioned by
 `../volcengine-k8s`. See [ADR-0002](../../../docs/adr/0002-kubernetes-deployment-substrate.md)
 for the broader plan this fits into.
 
+`.github/workflows/cd.yml` now runs the build/push/deploy sequence below
+automatically on every successful CI run on `main` — see
+[docs/DEPLOYMENT.md](../../../docs/DEPLOYMENT.md)'s "Kubernetes (VKE)"
+section for the one-time repo setup that requires. Everything below is still
+accurate for local testing of the chart or a manual deploy.
+
 ## Before installing
 
 1. **Build and push the image.** There's no CI/CD wiring yet (that's a

@@ -1,0 +1,25 @@
+# Copy to values-production.yaml and fill in the placeholders, then commit
+# it — unlike .env.production / terraform.tfvars, this file has no secrets
+# in it (existingSecretName points at a Secret created once, out-of-band,
+# via kubectl; see docs/DEPLOYMENT.md's "Kubernetes (VKE)" section). CD
+# (.github/workflows/cd.yml) reads this file on every deploy; image.repository
+# and image.tag are set by CD itself and don't need to be here.
+
+# A Secret with these exact keys must already exist in the target namespace
+# before the first `helm upgrade --install`:
+#   kubectl create namespace launchpad
+#   kubectl -n launchpad create secret generic launchpad-secrets \
+#     --from-literal=APP_AUTH_TOKEN="$(openssl rand -hex 32)" \
+#     --from-literal=ARK_API_KEY="replace-with-your-ark-api-key"
+#     # add --from-literal=OIDC_CLIENT_SECRET=... and
+#     # --from-literal=SESSION_SECRET=... too if env.AUTH_MODE is oidc below.
+existingSecretName: launchpad-secrets
+
+env:
+  AUTH_MODE: local
+  ARK_MODEL: replace-with-your-ark-endpoint-id
+
+ingress:
+  enabled: true
+  className: replace-with-your-ingress-class # e.g. nginx
+  host: replace-with-your-hostname

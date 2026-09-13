@@ -184,6 +184,84 @@ terraform -chdir=deploy/volcengine destroy
 > Destroying the stack removes the ECS instance, system disk, and Agent
 > workspaces. Back up required code first.
 
+## Kubernetes (VKE)
+
+An alternative to the single-VM paths above, per
+[ADR-0002](adr/0002-kubernetes-deployment-substrate.md): a Volcengine VKE
+cluster, deployed to with Helm and GitHub Actions. Additive — the ECS paths
+above still work and are unaffected.
+
+### Provision the cluster
+
+```bash
+cd deploy/volcengine-k8s
+cp terraform.tfvars.example terraform.tfvars   # fill in real values
+export VOLCENGINE_ACCESS_KEY=your-access-key
+export VOLCENGINE_SECRET_KEY=your-secret-key
+export TF_VAR_postgres_app_password=$(openssl rand -hex 16)
+terraform init
+terraform apply
+```
+
+A few values in `main.tf` are flagged `VERIFY:` — string enum values (CR
+registry `type`, RDS `node_type`/`account_type`, kubeconfig `type`) that the
+provider's machine-readable schema confirms as real fields but doesn't
+constrain to specific accepted values. Check these against the Volcengine
+console before the first `apply`.
+
+### One-time cluster setup
+
+The app Secret is created once, out-of-band — never by Helm or CD, so a
+redeploy can never blank it out (see
+`deploy/helm/launchpad/values-production.yaml.example` for the exact
+command). Then copy that example file to `values-production.yaml`, fill in
+the non-secret placeholders, and commit it — it contains no secrets once
+`existingSecretName` is used.
+
+### Manual deploy (or local testing of the chart)
+
+```bash
+docker build -t <registry-endpoint>/launchpad/agent-launchpad:<tag> .
+docker push <registry-endpoint>/launchpad/agent-launchpad:<tag>
+helm upgrade --install launchpad deploy/helm/launchpad \
+  -f deploy/helm/launchpad/values-production.yaml \
+  --set image.repository=<registry-endpoint>/launchpad/agent-launchpad \
+  --set image.tag=<tag> \
+  --namespace launchpad --create-namespace
+```
+
+See `deploy/helm/launchpad/README.md` for the chart's constraints (single
+replica, `RUNTIME_PROVIDER=local-process`) and why they exist.
+
+### CI/CD
+
+`.github/workflows/cd.yml` runs this same build-push-deploy sequence
+automatically, gated on `.github/workflows/ci.yml` passing on `main`. It
+needs repository configuration that has to be done in the GitHub UI (not
+something committable to this repo):
+
+- Repository variable `CR_REGISTRY` — the registry's actual push/pull
+  hostname (read it from the Volcengine console; it isn't exposed as a
+  Terraform output).
+- Repository secrets `CR_USERNAME` / `CR_PASSWORD` — a full account or a
+  console-created CR robot account (scoped push-only credentials;
+  recommended, not yet automated via Terraform).
+- Repository secret `KUBE_CONFIG_DATA` — the cluster's kubeconfig,
+  base64-encoded:
+  `terraform -chdir=deploy/volcengine-k8s output -raw kubeconfig | base64`.
+- A `production` [Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+  with required reviewers, if deploys should need a human approval — the
+  `deploy` job already targets `environment: production`.
+
+**Before any of this works, resolve API-server reachability.** The
+Terraform module restricts the VKE API server to `var.allowed_api_cidr`
+(deliberately never `0.0.0.0/0`), but GitHub-hosted runners have no fixed,
+allowlist-able IP range. Pick one: widen `allowed_api_cidr` to GitHub's
+published Actions IP ranges (large, and they change), run a self-hosted
+runner inside the VPC, or front the API server with a bastion/VPN the
+runner can reach. This is a real infra/security tradeoff with no default
+answer here.
+
 ## Secret handling
 
 - Ark keys configure model access; Volcengine account AK/SK configures
