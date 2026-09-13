@@ -1,0 +1,6 @@
+apiVersion: v2
+name: launchpad
+description: Agent Launchpad control plane (ADR-0002 Kubernetes substrate)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

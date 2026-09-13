@@ -1,0 +1,113 @@
+# Default values for the launchpad chart.
+#
+# IMPORTANT — do not raise replicaCount above 1. JsonStore
+# (apps/server/src/store.ts) is a single JSON file with an in-process write
+# queue; two pods writing to it concurrently will corrupt it. This becomes
+# safe once ADR-0001 Phase 2's Postgres-backed repositories land — not yet
+# implemented. See deploy/helm/launchpad/README.md.
+replicaCount: 1
+
+image:
+  # Push the built image to the Container Registry the Terraform module
+  # creates (deploy/volcengine-k8s outputs: registry_name, registry_namespace)
+  # and set this to that image, e.g.
+  # <registry-endpoint>/launchpad/agent-launchpad:<tag>. No CI/CD wiring
+  # exists yet — this is a manual docker build && docker push for now.
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Non-secret application settings, merged into the ConfigMap alongside the
+# fixed structural env (HOST/PORT/paths — see templates/configmap.yaml).
+# Mirrors the non-secret block of .env.example.
+env:
+  NODE_ENV: production
+  LOG_LEVEL: info
+  AUTH_MODE: local
+  ARK_BASE_URL: https://ark.cn-beijing.volces.com/api/v3
+  ARK_MODEL: ""
+  CODEX_SANDBOX_MODE: workspace-write
+  # Quoted: large unquoted numbers get mangled into scientific notation
+  # (e.g. "2.097152e+06") when Helm renders them, since YAML ints decode to
+  # float64 internally. Store anything ConfigMap-bound as a string.
+  CODEX_TIMEOUT_MS: "600000"
+  CODEX_MAX_OUTPUT_BYTES: "2097152"
+  GUARDRAIL_MODE: enforce
+  # Codex runs in-process (same pod, no per-run sandbox) regardless of
+  # Kubernetes — real sandboxed execution is ADR-0001 Phase 4, not this
+  # chart. See the chart README before changing this.
+  RUNTIME_PROVIDER: local-process
+  # Only used when AUTH_MODE=oidc; harmless to leave blank otherwise.
+  OIDC_ISSUER: ""
+  OIDC_CLIENT_ID: ""
+  OIDC_REDIRECT_URI: ""
+  OIDC_SCOPES: openid profile email
+  OIDC_ADMIN_EMAILS: ""
+  SESSION_TTL_MS: "43200000"
+  WEB_ORIGIN: ""
+
+# Secret application settings. Left empty by default — set via
+# `helm upgrade --install -f values-secret.yaml` (untracked) or `--set`, or
+# leave empty and set existingSecretName below to source these from a Secret
+# created outside the chart (the seam for a future secrets-manager/External
+# Secrets integration, per ADR-0001).
+secrets:
+  APP_AUTH_TOKEN: ""
+  ARK_API_KEY: ""
+  # Only used when env.AUTH_MODE=oidc.
+  OIDC_CLIENT_SECRET: ""
+  SESSION_SECRET: ""
+
+# Name of a pre-existing Secret with the same keys as `secrets` above. When
+# set, the chart does not create its own Secret and `secrets` is ignored.
+existingSecretName: ""
+
+persistence:
+  # One PVC, mounted three times via subPath (APP_DATA_DIR, AGENT_WORKSPACE_ROOT,
+  # CODEX_HOME all live under /app, which is also where the built app code
+  # lives — never mount over the whole of /app).
+  size: 10Gi
+  storageClassName: ""
+  accessMode: ReadWriteOnce
+
+service:
+  port: 80
+  targetPort: 3000
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls: []
+
+# Sized for RUNTIME_PROVIDER=local-process: Codex runs in this same pod, so
+# it needs the headroom a sibling container would otherwise have had (see
+# CONTAINER_CPU_LIMIT / CONTAINER_MEMORY_LIMIT defaults in
+# apps/server/src/config.ts for the reference point).
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

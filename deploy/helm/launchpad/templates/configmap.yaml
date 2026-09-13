@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "launchpad.fullname" . }}
+  labels:
+    {{- include "launchpad.labels" . | nindent 4 }}
+data:
+  # Structural env — tied to the probes/volumeMounts below, not meant to be
+  # overridden per-deployment.
+  HOST: "0.0.0.0"
+  PORT: "3000"
+  APP_DATA_DIR: /app/data
+  AGENT_WORKSPACE_ROOT: /app/workspaces
+  CODEX_HOME: /app/codex-home
+  {{- range $key, $value := .Values.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

@@ -1,0 +1,18 @@
+Agent Launchpad deployed as {{ include "launchpad.fullname" . }} in {{ .Release.Namespace }}.
+
+IMPORTANT: this chart runs a single replica by design (replicaCount: 1).
+JsonStore (apps/server/src/store.ts) is a single JSON file with an
+in-process write queue — it is not safe for two pods to write concurrently.
+Do not raise replicaCount until ADR-0001 Phase 2's Postgres-backed
+repositories replace it. See deploy/helm/launchpad/README.md.
+
+{{- if .Values.ingress.enabled }}
+
+Application URL:
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+{{- else }}
+
+No Ingress is configured (ingress.enabled=false). Reach the app with:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "launchpad.fullname" . }} 8080:{{ .Values.service.port }}
+then open http://localhost:8080
+{{- end }}
