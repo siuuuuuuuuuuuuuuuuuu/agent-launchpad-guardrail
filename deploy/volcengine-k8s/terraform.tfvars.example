@@ -1,0 +1,21 @@
+region           = "cn-beijing"
+zone_id          = "cn-beijing-a"
+project_name     = "default"
+allowed_api_cidr = "203.0.113.0/24"
+key_pair_name    = "replace-with-existing-key-pair"
+
+kubernetes_version            = "1.28"
+control_plane_node_type       = "ecs.g4i.large"
+control_plane_node_count_min  = 2
+control_plane_node_count_max  = 4
+runtime_node_type             = "ecs.g4i.large"
+runtime_node_count_min        = 1
+runtime_node_count_max        = 3
+
+postgres_engine_version = "PostgreSQL_14"
+# Look up a valid node spec ID for your region/zone in the Volcengine
+# console (RDS for PostgreSQL -> Create Instance) before setting this.
+postgres_node_spec  = "replace-with-a-valid-rds-postgres-node-spec"
+postgres_storage_gb = 20
+
+# Supply through TF_VAR_postgres_app_password instead of committing it here.

@@ -14,6 +14,9 @@ coverage/
 deploy/volcengine/.terraform/
 deploy/volcengine/*.tfstate*
 deploy/volcengine/terraform.tfvars
+deploy/volcengine-k8s/.terraform/
+deploy/volcengine-k8s/*.tfstate*
+deploy/volcengine-k8s/terraform.tfvars
 .claudeignore
 CLAUDE.md
 repomix-output.xml
